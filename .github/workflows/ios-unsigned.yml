@@ -1,0 +1,94 @@
+# 版权所有：波哥
+name: 禅阅 · 免费构建 iPhone 安装包
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_public_build:
+        description: 已确认源码可公开，使用标准公共 macOS 构建机，产物需要本机签名
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chanyue-unsigned-ios
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event.repository.private == false && inputs.confirm_public_build == true }}
+    runs-on: macos-15-intel
+    timeout-minutes: 35
+    env:
+      CI: 'true'
+      PYTHONUNBUFFERED: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 获取源码
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: 配置 Node.js 24
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.15.0'
+          cache: npm
+
+      - name: 选择 Xcode 26 工具链
+        run: |
+          python3 scripts/build_unsigned_ios.py --select-xcode >> "$GITHUB_ENV"
+
+      - name: 检查构建环境
+        run: |
+          xcodebuild -version
+          node --version
+          python3 scripts/build_unsigned_ios.py --check-only
+
+      - name: 安装项目依赖
+        run: npm ci --no-fund --no-audit
+
+      - name: 运行功能和打包流程单元测试
+        run: |
+          npm test
+          python3 -m unittest discover -s tests -p test_ios_packaging.py -v
+
+      - name: 构建并同步完全离线资源
+        run: npm run ios:sync
+
+      - name: 编译真机 ARM64 并生成未签名 IPA
+        run: python3 scripts/build_unsigned_ios.py
+
+      - name: 下载本机待签名安装包
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chanyue-unsigned-iphone
+          path: artifacts/ios-package/Chanyue-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+      - name: 保留失败日志
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: chanyue-ios-build-log
+          path: artifacts/ios-build/**/*.log
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: 安装提示
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          ## 禅阅：未签名 IPA 已生成
+          下载本次运行的 `chanyue-unsigned-iphone` 产物，解压外层 ZIP 获得 `Chanyue-unsigned.ipa`。
+          此 IPA 不能直接安装。请在自己的 Windows 上通过 AltServer / AltStore Classic，使用免费 Apple ID 签名安装。
+          不需要向 GitHub 上传 Apple ID、密码或证书。免费签名通常 7 天到期，请提前刷新签名。
+          App 阅读可离线；安装与定期续签需要联网，电脑不必一直开机。
+          产物保留 3 天；每周续签不需要重新运行云构建。详见 README 的 Windows 免费方案。
+          SUMMARY

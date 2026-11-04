@@ -1,0 +1,16 @@
+# 版权所有：波哥
+node_modules/
+dist/
+dist-native/
+public/pdf-assets/
+artifacts/
+*.local
+__pycache__/
+.codebuddy/
+.env
+.env.*
+*.p12
+*.p8
+*.mobileprovision
+*.ipa
+*.xcarchive/
