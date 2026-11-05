@@ -47,11 +47,11 @@ describe('原生持久化适配器（模拟插件）', () => {
     const book = { ...sampleBooks[0], id: 'import-1', title: '我的书' };
     await saveNativeBook(book);
     vi.mocked(Filesystem.writeFile).mockClear();
-    await saveNativePosition({ ...book, line: 2, offset: 0.55, lastReadAt: 123456 });
+    await saveNativePosition({ ...book, line: 2, offset: 0.55, character: 36.375, lastReadAt: 123456 });
     expect(Filesystem.writeFile).not.toHaveBeenCalled();
     await saveNativeBook({ ...book, title: '新书名' });
     expect((await loadNativeBooks()).find(b => b.id === book.id))
-      .toMatchObject({ title: '新书名', line: 2, offset: 0.55, lastReadAt: 123456 });
+      .toMatchObject({ title: '新书名', line: 2, offset: 0.55, character: 36.375, lastReadAt: 123456 });
   });
   it('删除后不会重新生成示例书', async () => {
     const books = await loadNativeBooks();

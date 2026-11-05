@@ -95,7 +95,7 @@ export async function importBook(file: File, onStatus: (status: string) => void)
   return {
     id: makeId(), title: file.name.replace(/\.[^.]+$/, '').slice(0, 150) || '未命名书籍',
     author: '本地导入', format: extension === 'txt' ? 'TXT' : extension === 'docx' ? 'WORD' : 'PDF',
-    lines, line: 0, offset: null, completed: false,
+    lines, line: 0, offset: null, character: 0, paragraphsPreserved: true, completed: false,
     createdAt: Date.now(), lastReadAt: 0, cover: Math.floor(Math.random() * 6),
   };
 }

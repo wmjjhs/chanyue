@@ -8,6 +8,8 @@ export type Book = {
   lines: string[];
   line: number;
   offset: number | null;
+  character?: number;
+  paragraphsPreserved?: boolean;
   completed: boolean;
   createdAt: number;
   lastReadAt: number;
@@ -16,12 +18,17 @@ export type Book = {
 };
 
 export type Settings = {
+  version: 2;
   font: 'song' | 'sans' | 'kai';
   fontSize: number;
   textColor: string;
   lineColor: string;
   pageColor: string;
   speed: number;
+  maxLines: number;
+  layoutMode: 'semantic' | 'compact';
+  cursorColor: string;
+  cursorScale: number;
 };
 
 export const fonts = {
@@ -33,8 +40,9 @@ export const fonts = {
 export const MAX_READING_SPEED = 1600;
 
 export const defaultSettings: Settings = {
-  font: 'song', fontSize: 32, textColor: '#364032',
-  lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 55,
+  version: 2, font: 'song', fontSize: 28, textColor: '#364032',
+  lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
+  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorScale: 1.35,
 };
 
 export const themes = [
@@ -50,62 +58,42 @@ export function validateSettings(value: unknown): Settings {
     typeof n === 'number' && Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   const color = (c: unknown, fallback: string) => typeof c === 'string' && /^#[\da-f]{6}$/i.test(c) ? c : fallback;
   return {
+    version: 2,
     font: v.font && Object.hasOwn(fonts, v.font) ? v.font : defaultSettings.font,
     fontSize: number(v.fontSize, 18, 64, defaultSettings.fontSize),
-    speed: number(v.speed, 15, MAX_READING_SPEED, defaultSettings.speed),
+    speed: v.version === 2 ? number(v.speed, 30, MAX_READING_SPEED, defaultSettings.speed) : defaultSettings.speed,
     textColor: color(v.textColor, defaultSettings.textColor),
     lineColor: color(v.lineColor, defaultSettings.lineColor),
     pageColor: color(v.pageColor, defaultSettings.pageColor),
+    maxLines: Math.round(number(v.maxLines, 2, 12, defaultSettings.maxLines)),
+    layoutMode: v.layoutMode === 'compact' ? 'compact' : 'semantic',
+    cursorColor: color(v.cursorColor, defaultSettings.cursorColor),
+    cursorScale: number(v.cursorScale, 1, 2, defaultSettings.cursorScale),
   };
 }
 
 export function splitLines(text: string): string[] {
   const normalized = text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n')
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '');
-  const result: string[] = [];
-  for (const paragraph of normalized.split(/\n+/)) {
-    const clean = paragraph.replace(/[\t \u00a0]+/g, ' ').trim();
-    if (!clean) continue;
-    let line = '';
-    for (const sentence of clean.match(/[^。！？!?；;]+[。！？!?；;]*|[。！？!?；;]+/gu) ?? [clean]) {
-      if (Array.from(line + sentence).length > 80 && line) {
-        result.push(line.trim()); line = '';
-      }
-      const chars = Array.from(sentence);
-      let start = 0;
-      while (chars.length - start > 100) {
-        if (line) { result.push(line.trim()); line = ''; }
-        result.push(chars.slice(start, start + 80).join('').trim());
-        start += 80;
-      }
-      line += chars.slice(start).join('');
-    }
-    if (line.trim()) result.push(line.trim());
-  }
-  return result.filter(Boolean);
+  return normalized.split(/\n+/).map(paragraph => paragraph.replace(/[\t \u00a0]+/g, ' ').trim()).filter(Boolean);
 }
 
-export function getFlowWindow(lines: string[], start: number, minCharacters = 2048): string[] {
-  let end = start;
-  let characters = 0;
-  while (end < lines.length && characters < minCharacters) {
-    characters += lines[end].length;
-    end++;
+const lengths = new WeakMap<string[], number>();
+export function textLength(lines: string[]): number {
+  let length = lengths.get(lines);
+  if (length === undefined) {
+    length = Math.max(0, lines.reduce((sum, line) => sum + line.length + 1, 0) - 1);
+    lengths.set(lines, length);
   }
-  return lines.slice(start, end);
-}
-
-export function advanceFlow(x: number, widths: number[]): { x: number; passed: number } {
-  let passed = 0;
-  while (passed < widths.length && x + widths[passed] <= 0) {
-    x += widths[passed];
-    passed++;
-  }
-  return { x, passed };
+  return length;
 }
 
 export function progressOf(book: Book): number {
-  return book.completed ? 100 : Math.floor(book.line / Math.max(1, book.lines.length) * 100);
+  if (book.completed) return 100;
+  if (typeof book.character === 'number' && Number.isFinite(book.character)) {
+    return Math.max(0, Math.min(99, Math.floor(book.character / Math.max(1, textLength(book.lines)) * 100)));
+  }
+  return Math.floor(book.line / Math.max(1, book.lines.length) * 100);
 }
 
 export function makeId(): string {

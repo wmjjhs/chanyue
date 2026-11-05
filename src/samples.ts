@@ -45,5 +45,5 @@ export const sampleBooks: Book[] = samples.map((sample, index) => ({
   id: `sample-${index}`, title: sample.title, author: '禅阅 · 原创短文',
   format: 'TXT', lines: splitLines(sample.content), line: 0, offset: null,
   completed: false, createdAt: 1700000000000 + index, lastReadAt: 0, cover: index,
-  sample: true,
+  sample: true, character: 0, paragraphsPreserved: true,
 }));

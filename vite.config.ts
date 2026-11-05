@@ -21,7 +21,7 @@ export default defineConfig(({ mode }) => ({
       manifest: {
         name: '禅阅 · 让阅读回归宁静',
         short_name: '禅阅',
-        description: '一行文字，一段与自己相处的时光。',
+        description: '多行静读，逐字跟随，留一段与自己相处的时光。',
         lang: 'zh-CN',
         theme_color: '#f7f7f2',
         background_color: '#f7f7f2',

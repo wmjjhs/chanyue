@@ -1,6 +1,7 @@
 // 版权所有：波哥
 import { describe, expect, it } from 'vitest';
-import { advanceFlow, defaultSettings, getFlowWindow, MAX_READING_SPEED, progressOf, splitLines, validateSettings } from './model';
+import { defaultSettings, MAX_READING_SPEED, progressOf, splitLines, validateSettings } from './model';
+import { createDocument, glyphPosition, initialPosition, layoutDocument, readingMetrics, scanFrame, sourcePosition } from './reading-layout';
 import { decodeText, importBook } from './importer';
 import { sampleBooks } from './samples';
 
@@ -8,31 +9,32 @@ describe('阅读行切分', () => {
   it('清除 BOM、空行和控制字符，保留标点', () => {
     expect(splitLines('\uFEFF第一行。\r\n\r\n第二行\u0000。')).toEqual(['第一行。', '第二行。']);
   });
-  it('按句子拆分长段落', () => {
-    const result = splitLines(`${'甲'.repeat(60)}。${'乙'.repeat(60)}。`);
-    expect(result).toHaveLength(2);
-    expect(result.join('')).toBe(`${'甲'.repeat(60)}。${'乙'.repeat(60)}。`);
+  it('保留完整段落，不再按80字截断', () => {
+    const paragraph = `${'甲'.repeat(60)}。${'乙'.repeat(60)}。`;
+    expect(splitLines(paragraph)).toEqual([paragraph]);
   });
   it('长行和代理对不会丢失或被切坏', () => {
     const original = '春🌱'.repeat(300);
-    const result = splitLines(original);
-    expect(result.every(line => Array.from(line).length <= 100)).toBe(true);
-    expect(result.join('')).toBe(original);
+    expect(splitLines(original)).toEqual([original]);
   });
   it('空文件没有阅读行', () => { expect(splitLines(' \n\t\r\n')).toEqual([]); });
 });
 
 describe('阅读设置与进度', () => {
   it('不信任持久化的非法参数', () => {
-    expect(validateSettings({ font: '__proto__', fontSize: NaN, speed: 9000, pageColor: 'url(invalid)' }))
+    expect(validateSettings({ version: 2, font: '__proto__', fontSize: NaN, speed: 9000, pageColor: 'url(invalid)' }))
       .toEqual({ ...defaultSettings, speed: MAX_READING_SPEED });
     expect(validateSettings(null)).toEqual(defaultSettings);
   });
-  it('最高速度为旧上限十倍，保存后仍能使用', () => {
-    expect(MAX_READING_SPEED).toBe(160 * 10);
-    expect(validateSettings({ speed: 1600 }).speed).toBe(1600);
-    expect(validateSettings({ speed: 900 }).speed).toBe(900);
-    expect(validateSettings({ speed: -1 }).speed).toBe(15);
+  it('迁移旧像素速度，但保留字号和颜色', () => {
+    expect(validateSettings({ speed: 1600, fontSize: 44, pageColor: '#123456' }))
+      .toEqual({ ...defaultSettings, fontSize: 44, pageColor: '#123456' });
+  });
+  it('字速、行数、倍率和配色有边界校验', () => {
+    expect(validateSettings({ ...defaultSettings, speed: 1600 }).speed).toBe(1600);
+    expect(validateSettings({ ...defaultSettings, speed: -1 }).speed).toBe(30);
+    expect(validateSettings({ ...defaultSettings, maxLines: 999, cursorScale: 9, cursorColor: 'url(x)' }))
+      .toMatchObject({ maxLines: 12, cursorScale: 2, cursorColor: defaultSettings.cursorColor });
   });
   it('已读完标记显示 100%', () => {
     expect(progressOf(sampleBooks[0])).toBe(0);
@@ -40,26 +42,57 @@ describe('阅读设置与进度', () => {
   });
 });
 
-describe('连续文字流', () => {
-  it('相邻阅读行不添加空格，保留行内英文空格', () => {
-    expect(getFlowWindow(['第一行。', '第二行。', 'hello world'], 0).join(''))
-      .toBe('第一行。第二行。hello world');
+describe('多行逐字阅读', () => {
+  it('紧凑模式忽略段落和空白，逐行排满', () => {
+    const doc = createDocument(['第一行。', '第二行。', 'hello world']);
+    const layout = layoutDocument(doc, 5, 'compact');
+    expect(doc.glyphs.join('')).toBe('第一行。第二行。helloworld');
+    expect(layout.rows.slice(0, -1).every(row => row.end - row.start === 5)).toBe(true);
+    expect(layout.rows[0].columns).toEqual([0, 1, 2, 3, 4]);
   });
-  it('预载窗口有限且跳行后从指定行开始', () => {
-    const lines = Array.from({ length: 10000 }, (_, i) => `第${i}行。`);
-    const window = getFlowWindow(lines, 20, 100);
-    expect(window[0]).toBe('第20行。');
-    expect(window.join('').length).toBeGreaterThanOrEqual(100);
-    expect(window.length).toBeLessThan(30);
-    expect(getFlowWindow(lines, lines.length)).toEqual([]);
+  it('语义模式保留段落、缩进和完整单词', () => {
+    const doc = createDocument(['甲乙。', 'hello world']);
+    const layout = layoutDocument(doc, 8, 'semantic');
+    expect(layout.rows.filter(row => row.paragraph)).toHaveLength(2);
+    expect(layout.rows[0].columns[0]).toBe(2);
+    expect(layout.rows.map(row => doc.glyphs.slice(row.start, row.end).join(''))).toEqual(['甲乙。', 'hello', 'world']);
   });
-  it('刚好过行时下一行直接位于左端，而不是重新从右侧进入', () => {
-    expect(advanceFlow(-100, [100, 80])).toEqual({ x: 0, passed: 1 });
+  it('组合字和emoji不拆开，包括4096分块边界', () => {
+    const doc = createDocument(['甲'.repeat(4095) + '👨‍👩‍👧‍👦e\u0301🇨🇳']);
+    expect(doc.glyphs.slice(-3)).toEqual(['👨‍👩‍👧‍👦', 'e\u0301', '🇨🇳']);
   });
-  it('高速一帧跨越多行仍保留剩余位移', () => {
-    expect(advanceFlow(-147.5, [40, 50, 60, 90])).toEqual({ x: -57.5, passed: 2 });
-    expect(advanceFlow(-150, [40, 50, 60])).toEqual({ x: 0, passed: 3 });
-    expect(advanceFlow(28, [40, 50])).toEqual({ x: 28, passed: 0 });
+  it('排版变化不改变字符锚点和小数进度', () => {
+    const doc = createDocument(['你好 world', '🌱新段落。']);
+    const source = sourcePosition(doc, 8.375);
+    for (const mode of ['semantic', 'compact'] as const) {
+      for (const width of [2, 8, 20]) {
+        const layout = layoutDocument(doc, width, mode);
+        expect(glyphPosition(doc, source)).toBeCloseTo(8.375);
+        expect(layout.rows.at(-1)?.end).toBe(doc.glyphs.length);
+      }
+    }
+    expect(initialPosition({ ...sampleBooks[0], lines: ['你好 world', '🌱新段落。'], line: 1, character: undefined }, doc)).toBe(7);
+  });
+  it('同一行内匀速上移，换行边界连续且不会漏字', () => {
+    const layout = layoutDocument(createDocument(['甲乙丙丁戊己庚辛'.repeat(20)]), 8, 'compact');
+    expect(scanFrame(layout, 2, 64).scroll - scanFrame(layout, 1, 64).scroll).toBe(8);
+    expect(scanFrame(layout, 8, 64).scroll).toBe(64);
+    expect(scanFrame(layout, 8, 64).scroll - scanFrame(layout, 7.999, 64).scroll).toBeCloseTo(0.008);
+    expect(scanFrame(layout, 22.5, 64).active).toBe(22);
+  });
+  it('短段落按实际字数计算上移速度，位置连续', () => {
+    const layout = layoutDocument(createDocument(['甲', '乙丙丁']), 8, 'semantic');
+    expect(scanFrame(layout, 1, 60).scroll).toBe(60);
+    expect(scanFrame(layout, 1.5, 60).scroll).toBe(70);
+  });
+  it('小屏大字与放大仍保留两行，最大行数限制有效', () => {
+    const metrics = readingMetrics(700, 180, { ...defaultSettings, fontSize: 64, cursorScale: 2, maxLines: 12 });
+    expect(metrics.visibleLines).toBe(2);
+    expect(metrics.fontSize).toBeLessThan(64);
+    expect(metrics.lineHeight * metrics.visibleLines).toBeLessThanOrEqual(182);
+    expect(readingMetrics(900, 1000, { ...defaultSettings, maxLines: 3 }).visibleLines).toBe(3);
+    const narrow = readingMetrics(272, 600, { ...defaultSettings, fontSize: 64, cursorScale: 2 });
+    expect(narrow.columns * narrow.cellWidth + 32).toBeLessThanOrEqual(272);
   });
 });
 

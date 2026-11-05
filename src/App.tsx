@@ -4,7 +4,7 @@ import { BookOpen, Library, SlidersHorizontal, CircleHelp, Plus, ArrowUpRight, A
 import { Brand, BookCover, Modal, SettingsPanel, Guide } from './components';
 import Reader, { type ReadingPosition } from './Reader';
 import { importBook } from './importer';
-import { defaultSettings, progressOf, type Book, type Settings } from './model';
+import { defaultSettings, progressOf, textLength, type Book, type Settings } from './model';
 import { loadBooks, loadSettings, saveSettings, saveBook, savePosition, deleteBook } from './storage';
 
 export default function App() {
@@ -135,7 +135,7 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="sidebar-note"><span className="little-branch"><Leaf size={27} strokeWidth={1} /></span><p>读书不觉已春深，<br />一寸光阴一寸金。</p><span>让心慢下来，让文字流淌。</span></div>
           <div className="local-indicator"><span /><span>本地书库 · 安心私享</span><ShieldCheck size={15} /></div>
-          <div className="sidebar-version">禅阅 CHAN YUE <span>v1.0</span></div>
+          <div className="sidebar-version">禅阅 CHAN YUE <span>v1.1</span></div>
         </div>
       </aside>
       <div className="workspace">
@@ -147,7 +147,7 @@ export default function App() {
           {storageError ? <div className="storage-error"><ShieldCheck size={28} /><h2>暂时无法打开本地书库</h2><p>请检查本机存储空间；网页端还需允许网站存储并退出无痕模式。现有数据不会被主动删除。</p><button className="primary-button" onClick={() => setRetry(value => value + 1)}>重试</button></div> : loading ? <div className="loading-state"><LoaderCircle className="spinning" />正在整理你的书架…</div> : <>
             <section className="continue-card" aria-label="继续阅读">
               <div className="continue-content"><span className="continue-eyebrow"><span />{continuing?.lastReadAt ? '此刻，继续阅读' : '从这一行，开始静下来'}</span><h2>{continuing?.title ?? '下一本好书，等你翻开'}</h2><p>{continuing ? continuing.author : '导入喜欢的文字，拥有自己的宁静角落。'}</p>
-                {continuing && <div className="continue-progress"><div className="progress-track"><i style={{ width: `${progress}%` }} /></div><span>{progress > 0 ? `已读 ${progress}%` : '等待开启'}</span><span className="progress-detail">{continuing.lines.length} 行文字</span></div>}
+                {continuing && <div className="continue-progress"><div className="progress-track"><i style={{ width: `${progress}%` }} /></div><span>{progress > 0 ? `已读 ${progress}%` : '等待开启'}</span><span className="progress-detail">约 {textLength(continuing.lines)} 字</span></div>}
                 <button className="primary-button continue-button" onClick={() => continuing ? readBook(continuing) : openImport()}><BookOpen size={17} />{continuing?.lastReadAt ? '继续阅读' : continuing ? '开启阅读' : '导入第一本书'}<ArrowRight size={17} /></button>
               </div>
               <div className="hero-art" aria-hidden="true"><div className="zen-ring ring-one" /><div className="zen-ring ring-two" /><div className="zen-ring ring-three" /><div className="hero-vertical">一行文字<br />一念清欢</div>{continuing && <div className="hero-book"><BookCover book={continuing} /></div>}<div className="hero-caption">慢一点，读深一点。</div><span className="art-leaf leaf-one" /><span className="art-leaf leaf-two" /></div>
@@ -158,12 +158,12 @@ export default function App() {
               <div className="book-grid" role="tabpanel" aria-label={filter}>
                 {filtered.map(book => <article className="book-card" key={book.id}>
                   <button className={`book-cover-area tone-${book.cover % 6}`} onClick={() => readBook(book)} aria-label={`阅读《${book.title}》`}><BookCover book={book} /><span className="cover-open"><BookOpen size={16} />静心阅读<ArrowUpRight size={16} /></span><span className="format-badge">{book.format === 'WORD' ? 'DOCX' : book.format}</span></button>
-                  <div className="book-info"><div className="book-title-row"><button className="book-title" onClick={() => readBook(book)} title={book.title}>{book.title}</button><button className="book-menu icon-button" aria-label={`管理《${book.title}》`} onClick={() => { setManageId(book.id); setNewTitle(book.title); setConfirmDelete(false); }}><MoreHorizontal size={18} /></button></div><p>{book.author}</p><div className="book-progress-row"><span className={book.completed ? 'finished' : book.lastReadAt ? 'in-progress' : ''}>{book.completed ? <><CheckCircle2 size={12} />已读完</> : book.lastReadAt ? `已读 ${progressOf(book)}%` : '未开始'}</span><span>{book.lines.length} 行</span></div><div className="book-progress"><i style={{ width: `${progressOf(book)}%` }} /></div></div>
+                  <div className="book-info"><div className="book-title-row"><button className="book-title" onClick={() => readBook(book)} title={book.title}>{book.title}</button><button className="book-menu icon-button" aria-label={`管理《${book.title}》`} onClick={() => { setManageId(book.id); setNewTitle(book.title); setConfirmDelete(false); }}><MoreHorizontal size={18} /></button></div><p>{book.author}</p><div className="book-progress-row"><span className={book.completed ? 'finished' : book.lastReadAt ? 'in-progress' : ''}>{book.completed ? <><CheckCircle2 size={12} />已读完</> : book.lastReadAt ? `已读 ${progressOf(book)}%` : '未开始'}</span><span>约 {textLength(book.lines)} 字</span></div><div className="book-progress"><i style={{ width: `${progressOf(book)}%` }} /></div></div>
                 </article>)}
                 {!filtered.length && (search || filter !== '全部书籍') ? <div className="empty-state"><Search size={30} strokeWidth={1.2} /><h3>{search ? '还没有找到这本书' : filter === '正在读' ? '故事，等待你的开始' : '慢慢读，不必急着读完'}</h3><p>{search ? '换个关键词，或把它带进书架。' : '阅读状态会随你的进度自动更新。'}</p><button className="text-button" onClick={() => { setSearch(''); setFilter('全部书籍'); }}>查看全部书籍 <ArrowRight size={15} /></button></div> : <button className="add-book-card" onClick={openImport}><span className="add-circle"><Plus size={27} strokeWidth={1.2} /></span><strong>带一本书进来</strong><p>给心灵，添一处风景</p><span className="supported-formats">TXT <i /> WORD <i /> PDF</span><span className="add-book-bottom">点击导入本地文件 <ArrowUpRight size={13} /></span></button>}
               </div>
             </section>
-            <div className="reading-note"><div className="note-icon"><Coffee size={23} strokeWidth={1.2} /></div><div><h3>不必读得很快，只需读得自在。</h3><p>单行流水阅读，让目光停留，让思绪舒展。横屏竖屏，都有恰好的阅读节奏。</p></div><button className="text-button" onClick={() => setPanel('settings')}>调整我的节奏 <ArrowRight size={16} /></button></div>
+            <div className="reading-note"><div className="note-icon"><Coffee size={23} strokeWidth={1.2} /></div><div><h3>不必读得很快，只需读得自在。</h3><p>多行文字，逐字光标。保留段落或紧凑排列，让每一字都跟得上。</p></div><button className="text-button" onClick={() => setPanel('settings')}>调整我的节奏 <ArrowRight size={16} /></button></div>
           </>}
           <footer className="library-footer"><span><ShieldCheck size={14} />书籍仅保存在本机，不上传云端</span><button onClick={() => setPanel('guide')}><Smartphone size={14} />在 iPhone 上使用 <ArrowUpRight size={12} /></button></footer>
         </main>
@@ -188,7 +188,7 @@ export default function App() {
       <button className="primary-button full-width" disabled={busy} onClick={() => setPanel(null)}>{busy ? '正在导入…' : importResults.some(result => !result.error) ? '回书架，开始阅读' : '完成'}</button>
     </Modal>}
     {managed && <Modal title="管理这本书" eyebrow="BOOK DETAILS / 书籍管理" onClose={() => { if (!managing) setManageId(null); }} className="manage-modal">
-      <div className="manage-summary"><BookCover book={managed} small /><div><h3>{managed.title}</h3><p>{managed.format} · {managed.lines.length} 行</p><span>{managed.sample ? '禅阅原创示例，可自由移除' : `导入于 ${new Date(managed.createdAt).toLocaleDateString('zh-CN')}`}</span><span>已读 {progressOf(managed)}%</span></div></div>
+      <div className="manage-summary"><BookCover book={managed} small /><div><h3>{managed.title}</h3><p>{managed.format} · 约 {textLength(managed.lines)} 字</p><span>{managed.sample ? '禅阅原创示例，可自由移除' : `导入于 ${new Date(managed.createdAt).toLocaleDateString('zh-CN')}`}</span><span>已读 {progressOf(managed)}%</span></div></div>
       <form onSubmit={async event => {
         event.preventDefault(); if (!newTitle.trim()) return; setManaging(true);
         const renamed = { ...managed, title: newTitle.trim() };

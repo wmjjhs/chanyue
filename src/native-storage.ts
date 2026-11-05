@@ -37,6 +37,7 @@ function mergePosition(book: Book, position: Partial<Book>): Book {
     ...book,
     line: Number.isInteger(position.line) ? Math.max(0, Math.min(book.lines.length - 1, position.line!)) : 0,
     offset: typeof position.offset === 'number' && Number.isFinite(position.offset) ? Math.max(0, Math.min(1, position.offset)) : null,
+    character: typeof position.character === 'number' && Number.isFinite(position.character) ? Math.max(0, position.character) : undefined,
     completed: position.completed === true,
     lastReadAt: typeof position.lastReadAt === 'number' && Number.isFinite(position.lastReadAt) ? position.lastReadAt : 0,
   };
@@ -78,9 +79,9 @@ export function saveNativeBook(book: Book) {
   return serial(() => writeBook(book));
 }
 
-export function saveNativePosition({ id, line, offset, completed, lastReadAt }: Book) {
+export function saveNativePosition({ id, line, offset, character, completed, lastReadAt }: Book) {
   pathFor(id);
-  return serial(() => Preferences.set({ key: positionKey(id), value: JSON.stringify({ line, offset, completed, lastReadAt }) }));
+  return serial(() => Preferences.set({ key: positionKey(id), value: JSON.stringify({ line, offset, character, completed, lastReadAt }) }));
 }
 
 export function deleteNativeBook(id: string) {

@@ -6,7 +6,7 @@ import { sampleBooks } from './samples';
 import { Capacitor } from '@capacitor/core';
 import { deleteNativeBook, loadNativeBooks, loadNativeSettings, saveNativeBook, saveNativePosition, saveNativeSettings } from './native-storage';
 
-type Position = Pick<Book, 'id' | 'line' | 'offset' | 'completed' | 'lastReadAt'>;
+type Position = Pick<Book, 'id' | 'line' | 'offset' | 'character' | 'completed' | 'lastReadAt'>;
 interface LibraryDB extends DBSchema {
   books: { key: string; value: Book };
   positions: { key: string; value: Position };
@@ -46,11 +46,11 @@ export async function saveBook(book: Book) {
 
 export async function savePosition(book: Book) {
   if (Capacitor.isNativePlatform()) return saveNativePosition(book);
-  const { id, line, offset, completed, lastReadAt } = book;
+  const { id, line, offset, character, completed, lastReadAt } = book;
   const db = await database();
   const tx = db.transaction(['books', 'positions'], 'readwrite');
   if (await tx.objectStore('books').count(id)) {
-    await tx.objectStore('positions').put({ id, line, offset, completed, lastReadAt });
+    await tx.objectStore('positions').put({ id, line, offset, character, completed, lastReadAt });
   }
   await tx.done;
 }
