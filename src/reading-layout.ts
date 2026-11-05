@@ -2,23 +2,22 @@
 import type { Book, Settings } from './model';
 
 export type ReadingDocument = {
-  glyphs: string[];
-  offsets: number[];
-  paragraphStarts: Set<number>;
-  spaces: Set<number>;
-  lineStarts: number[];
-  length: number;
+  glyphs: string[]; offsets: number[]; words: number[]; wordOffsets: number[]; wordOrdinal: number[];
+  paragraphStarts: Set<number>; spaces: Set<number>; lineStarts: number[]; length: number;
 };
-export type ReadingRow = { start: number; end: number; columns: number[]; paragraph: boolean };
+export type ReadingRow = {
+  start: number; end: number; glyphs: number[]; columns: number[]; paragraph: boolean; wordStart: number; wordEnd: number;
+};
 export type ReadingLayout = { rows: ReadingRow[]; rowOf: Uint32Array; columns: number };
 
+export const isPunctuation = (glyph: string) => /^[\p{P}\p{M}\u200d]+$/u.test(glyph);
+const segmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter('zh', { granularity: 'grapheme' }) : null;
 function* graphemes(text: string): Generator<{ segment: string; index: number }> {
-  if (typeof Intl.Segmenter !== 'function') {
+  if (!segmenter) {
     let index = 0;
     for (const segment of text) { yield { segment, index }; index += segment.length; }
     return;
   }
-  const segmenter = new Intl.Segmenter('zh', { granularity: 'grapheme' });
   let carry = '';
   let base = 0;
   for (let offset = 0; offset < text.length; offset += 4096) {
@@ -35,7 +34,7 @@ function* graphemes(text: string): Generator<{ segment: string; index: number }>
 }
 
 export function createDocument(lines: string[]): ReadingDocument {
-  const document: ReadingDocument = { glyphs: [], offsets: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0 };
+  const document: ReadingDocument = { glyphs: [], offsets: [], words: [], wordOffsets: [], wordOrdinal: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0 };
   for (const line of lines) {
     document.lineStarts.push(document.length);
     let first = true;
@@ -47,6 +46,11 @@ export function createDocument(lines: string[]): ReadingDocument {
       else if (space) document.spaces.add(position);
       document.glyphs.push(segment);
       document.offsets.push(document.length + index);
+      document.wordOrdinal.push(isPunctuation(segment) ? -1 : document.words.length);
+      if (!isPunctuation(segment)) {
+        document.words.push(position);
+        document.wordOffsets.push(document.length + index);
+      }
       first = false;
       space = false;
     }
@@ -68,23 +72,23 @@ export function floorIndex(sorted: number[], value: number): number {
 }
 
 export function glyphPosition(document: ReadingDocument, source: number): number {
-  if (source >= document.length) return document.glyphs.length;
-  const index = floorIndex(document.offsets, Math.max(0, source));
-  const start = document.offsets[index] ?? 0;
-  const end = document.offsets[index + 1] ?? document.length;
+  if (!document.words.length || source >= document.length) return document.words.length;
+  const index = floorIndex(document.wordOffsets, Math.max(0, source));
+  const start = document.wordOffsets[index];
+  const end = document.wordOffsets[index + 1] ?? document.length;
   return index + Math.max(0, Math.min(0.999999, (source - start) / Math.max(1, end - start)));
 }
 
 export function sourcePosition(document: ReadingDocument, position: number): number {
-  if (position >= document.glyphs.length) return document.length;
+  if (position >= document.words.length) return document.length;
   const index = Math.max(0, Math.floor(position));
-  const start = document.offsets[index] ?? 0;
-  const end = document.offsets[index + 1] ?? document.length;
+  const start = document.wordOffsets[index] ?? 0;
+  const end = document.wordOffsets[index + 1] ?? document.length;
   return start + (position - index) * (end - start);
 }
 
 export function initialPosition(book: Book, document: ReadingDocument): number {
-  if (book.completed) return document.glyphs.length;
+  if (book.completed) return document.words.length;
   if (typeof book.character === 'number' && Number.isFinite(book.character)) return glyphPosition(document, book.character);
   return glyphPosition(document, document.lineStarts[Math.max(0, Math.min(book.line, document.lineStarts.length - 1))] ?? 0);
 }
@@ -97,14 +101,18 @@ export function layoutDocument(document: ReadingDocument, width: number, mode: S
   const columns = Math.max(2, Math.floor(width));
   const rows: ReadingRow[] = [];
   const rowOf = new Uint32Array(document.glyphs.length);
-  let row: ReadingRow = { start: 0, end: 0, columns: [], paragraph: true };
+  let words = 0;
+  const empty = (start: number): ReadingRow => ({ start, end: start, glyphs: [], columns: [], paragraph: false, wordStart: words, wordEnd: words });
+  let row = empty(0);
+  row.paragraph = true;
   let column = mode === 'semantic' && columns >= 6 ? 2 : 0;
   const finish = () => {
-    if (row.end > row.start) rows.push(row);
-    row = { start: row.end, end: row.end, columns: [], paragraph: false };
+    if (row.glyphs.length) rows.push(row);
+    row = empty(row.end);
     column = 0;
   };
   for (let i = 0; i < document.glyphs.length; i++) {
+    if (mode === 'plain' && document.wordOrdinal[i] < 0) continue;
     if (mode === 'semantic' && document.paragraphStarts.has(i) && i !== 0) {
       finish(); row.paragraph = true; column = columns >= 6 ? 2 : 0;
     }
@@ -118,22 +126,15 @@ export function layoutDocument(document: ReadingDocument, width: number, mode: S
     if (row.columns.length) column += gap;
     if (mode === 'semantic' && column === columns - 1 && i + 1 < document.glyphs.length && closing.test(document.glyphs[i + 1]) && !document.paragraphStarts.has(i + 1) && row.columns.length > 0) finish();
     rowOf[i] = rows.length;
+    if (!row.glyphs.length) row.start = i;
+    row.glyphs.push(i);
     row.columns.push(column++);
     row.end = i + 1;
+    if (document.wordOrdinal[i] >= 0) words++;
+    row.wordEnd = words;
   }
   finish();
   return { rows, rowOf, columns };
-}
-
-export function scanFrame(layout: ReadingLayout, position: number, lineHeight: number) {
-  const last = layout.rowOf.length - 1;
-  const active = Math.max(0, Math.min(last, Math.floor(position)));
-  const rowIndex = layout.rowOf[active] ?? 0;
-  const row = layout.rows[rowIndex];
-  if (!row) return { active, rowIndex: 0, column: 0, phase: 0, scroll: 0, count: 1 };
-  const count = row.end - row.start;
-  const phase = Math.min(1, Math.max(0, (position - row.start) / count));
-  return { active, rowIndex, column: row.columns[active - row.start], phase, scroll: (rowIndex + phase) * lineHeight, count };
 }
 
 export function readingMetrics(width: number, height: number, settings: Settings) {

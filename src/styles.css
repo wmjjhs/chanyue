@@ -318,14 +318,11 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .reading-workspace { flex: 1; min-height: 0; width: min(100% - 48px, 1080px); margin: 20px auto 12px; display: flex; align-items: center; justify-content: center; }
 .reader-v2 .multiline-band { position: relative; min-height: 0; max-width: 100%; border-radius: 12px; white-space: normal; line-height: 1; mask-image: none; -webkit-mask-image: none; border: 1px solid #8b997514; box-shadow: inset 0 1px 12px #52623a03; }
 .reading-grid { position: relative; height: 100%; margin: 0 auto; }
-.reader-v2 .multiline-text { position: absolute; top: 0; left: 0; width: 100%; white-space: normal; letter-spacing: 0; will-change: transform; z-index: 2; }
-.reading-row { position: relative; width: 100%; }
+.reader-v2 .multiline-text { position: absolute; inset: 0; width: 100%; white-space: normal; letter-spacing: 0; will-change: transform; transform: translate3d(0, 0, 0); z-index: 2; }
+.reading-row { position: absolute; top: 0; left: 0; width: 100%; contain: layout style; }
 .reading-glyph { position: absolute; top: 0; width: var(--cell-width); height: var(--line-height); display: flex; align-items: center; justify-content: center; white-space: pre; }
 .reading-glyph > span { display: inline-block; line-height: 1.1; transform-origin: center; }
-.reading-glyph.is-current { color: var(--cursor-ink); z-index: 3; }
-.reading-glyph.is-current > span { transform: scale(var(--cursor-scale)); }
-.scan-cursor { position: absolute; left: 0; top: 0; width: var(--cell-width); height: var(--line-height); border-radius: 7px; background: var(--cursor-color); color: var(--cursor-ink); overflow: hidden; z-index: 1; will-change: transform; }
-.cursor-sweep { position: absolute; height: 2px; bottom: 6px; left: 8%; width: 84%; background: currentColor; opacity: .45; clip-path: inset(0 calc(100% - var(--sweep, 0%)) 0 0); }
+.scan-cursor { position: absolute; left: 0; top: 0; width: var(--cell-width); height: var(--line-height); border-radius: 9px; background: var(--cursor-color); color: var(--cursor-ink); overflow: hidden; z-index: 1; will-change: transform; pointer-events: none; }
 .reader-v2 .v2-controls { position: static; flex-shrink: 0; padding: 4px 16px 0; }
 .reader-v2 .line-counter { margin-top: 0; font-size: 11px; }
 .reader-v2 .reader-controls { margin-top: 16px; gap: 36px; }
@@ -334,8 +331,9 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .reader-v2.is-focused .reader-mode-info { visibility: hidden; }
 .multiline-preview { padding: 12px 20px !important; white-space: normal !important; text-align: left; font-size: 25px; letter-spacing: .04em !important; }
 .preview-paragraph { display: block; text-indent: 2em; }
-.preview-cursor { display: inline-block; position: relative; border-radius: 4px; padding: 0 2px; margin: 0 5px; line-height: 1.35; }
-.layout-options { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0 20px; }
+.preview-window { display: inline-flex; border-radius: 8px; padding: 10px 7px; margin: 3px 0 12px; max-width: 100%; letter-spacing: 0; }
+.preview-window + span { display: block; }
+.layout-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 12px 0 20px; }
 .layout-options button { padding: 12px; background: #f5f6ef; border: 1px solid #e0e5d6; border-radius: 7px; font-size: 12px; text-align: left; }
 .layout-options button[aria-pressed="true"] { background: #edf2e3; border-color: #8a9f74; color: #4a603e; }
 .layout-options small { display: block; color: #909b84; font-size: 9px; margin-top: 7px; }

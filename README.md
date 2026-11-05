@@ -9,7 +9,7 @@
 
 ### Windows 免费方案：GitHub 公开仓库云编译 + 本机免费签名
 
-无需购买 Mac 或 Apple Developer Program。**免费签名通常只有 7 天有效期，需要定期联网刷新；并非一次安装后永久离线可用。** 运行期间无需电脑保持开机。当前只准备了本地构建配置，尚未上传源码、执行 GitHub 构建或生成经过真机验证的 IPA。
+无需购买 Mac 或 Apple Developer Program。**免费签名通常只有 7 天有效期，需要定期联网刷新；并非一次安装后永久离线可用。** 运行期间无需电脑保持开机。源码托管在 [wmjjhs/chanyue](https://github.com/wmjjhs/chanyue)。每次升级必须下载对应提交的新构建产物，旧 IPA 不包含后续改动；云构建成功不代表完成签名、安装或真机流畅度验收。
 
 #### 1. 准备 GitHub 公开仓库
 
@@ -17,7 +17,7 @@
 - 根据 [GitHub Actions 计费说明](https://docs.github.com/en/billing/concepts/product-billing/github-actions)，公开仓库的标准托管 runner 可免费使用。不要添加付款方式、提高存储额度或启用额外付费服务；若平台提示费用，先停止并核对，不改用付费 runner。
 - 创建仓库时选择 **Public**。推荐使用 [GitHub Desktop](https://desktop.github.com/) 选择本项目所在文件夹，检查待提交文件后发布；如果使用 Publish repository，取消 **Keep this code private**，发布后核对为 **Public**。任何人都能查看公开源码，因此必须先检查待上传内容。
 - 如果先在 GitHub 网页创建空仓库，建议名称为 `chanyue`，不要初始化 README、`.gitignore` 或 License，以免与本地已有文件冲突。仓库创建后记下地址，例如 `https://github.com/你的用户名/chanyue`。
-- 不要直接拖拽整个项目到网页上传：网页上传不应用 `.gitignore`，还容易遗漏 `.github`。当前尚未替你创建仓库或上传文件。
+- 不要直接拖拽整个项目到网页上传：网页上传不应用 `.gitignore`，还容易遗漏 `.github`。已有仓库更新请使用 Git 提交并推送，避免遗漏文件。
 - 必须包含 `.github/workflows/ios-unsigned.yml`、`ios` 原生源码及共享 scheme、`src`、`scripts`、`tests`、`public` 原始图标、`package.json`、`package-lock.json` 和根目录构建配置。不要上传 `node_modules`、`dist`、`dist-native`、`artifacts`、`public/pdf-assets`、`ios/App/App/public` 等可重建内容。
 - `.gitignore` 已排除 `.codebuddy`、环境变量、签名材料和构建产物。`.codebuddy` 是项目数据，保留在本机，不删除。忽略规则不会撤回已跟踪文件，也不是敏感信息审计；发布前仍须检查暂存内容。
 - 不要上传自己的书籍、Apple ID 密码、GitHub Token 或证书私钥。本流程不需要任何 Apple Secrets。无需配置付款方式或开启超额付费；若 GitHub 提示收费/付款验证，先停止并核查，不要改成付费 runner。
@@ -35,7 +35,7 @@
 1. 按 [AltStore Classic 官方 Windows 安装指南](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows) 安装 AltServer；根据该指南准备 Apple 官方版本的 iTunes/iCloud，不购买收费签名服务。请核实下载源，不运行来历不明的修改版安装器。
 2. 用数据线连接 iPhone、解锁并信任自己的电脑，按指南开启 Wi-Fi 同步。通过 AltServer 的 **Install AltStore** 安装 AltStore Classic。
 3. 在你自己的可信工具窗口输入免费 Apple ID，按手机提示信任开发者；iOS 16+ 通常还需启用开发者模式。**Apple ID 密码只由你在本机输入，不发给助手或 GitHub。**
-4. 将 `Chanyue-unsigned.ipa` 保存到 iPhone 的「文件」中。打开 AltStore Classic → **My Apps → +** 选择 IPA，并保持手机能连接正在运行的 AltServer，完成签名和安装。若当前版本界面不同，以官方说明为准。
+4. 将对应新版 `Chanyue-unsigned.ipa` 保存到 iPhone 的「文件」中。打开 AltStore Classic → **My Apps → +** 选择 IPA，并保持手机能连接正在运行的 AltServer，完成签名和安装。覆盖升级须使用原来的 Apple ID，并保持 Bundle ID `app.chanyue.reader` 不变；不要先卸载旧版，避免丢失书库。若当前版本界面不同，以官方说明为准。
 5. 安装成功后先完成系统要求的联网信任/验证，再开启飞行模式打开禅阅。阅读引擎、中文 PDF 字库和示例书均在包内。尚未下载的 iCloud 书籍需要先保存到本机。
 
 #### 4. 每周刷新，不必重新云编译
@@ -45,7 +45,7 @@
 - 每周只是刷新已有 App 的签名，**不需要重新上传源码、跑 GitHub 构建或生成新 IPA**。不要为了续签删除禅阅，否则可能丢失本机书库。
 - 免费账户的侧载应用数量有限。安装失败时先检查名额、有效期及设备连接，不要付费绕过提示。升级 iOS、AltServer 或 Apple 签名政策变化可能影响安装，请以实际错误和官方指南为准。
 
-工作流配置位于 `.github/workflows/ios-unsigned.yml`，打包脚本位于 `scripts/build_unsigned_ios.py`。当前只完成配置与本地校验；只有云端任务成功并在 iPhone 验收后，才能确认实际安装可用。
+工作流配置位于 `.github/workflows/ios-unsigned.yml`，打包脚本位于 `scripts/build_unsigned_ios.py`。云构建只生成未签名产物；只有完成本机签名、安装并在 iPhone 验收后，才能确认实际安装可用。
 
 ### 在 Mac 上编译和安装（可选）
 
@@ -81,12 +81,12 @@
 
 ## 功能
 
-- 多行逐字引导阅读：正文不横向移动。整字光标按固定字时长前进，当前字放大、光标内进度线匀速扫过；默认 240 字/分钟，不自动播放。
-- 语义段落模式保留原始段落、首行缩进、英文词间隔，并尽量避免标点出现在行首；紧凑模式忽略段落与空白，把所有字顺序排满。均离线完成，不是联网 AI 语义重写。
-- 设置宋体／黑体／楷体、18–64 px 字号、文字颜色、阅读区域背景、页面背景、最多2–12行、光标颜色、1–2倍放大及30–1600字/分钟。按 Unicode 字素计数，标点计时、空白不计时，组合emoji不拆开（旧内核回退到码点）。
-- 放大空间预先留好，不推动邻字；屏幕不足时实际显示行数小于设置上限。极大字号配合窄横屏时会临时缩小字号以容纳至少两行，界面会提示；原设置不变。
-- 上移与光标共用一个动画时钟：上移速度＝行高 × 每秒字数 ÷ 当前行字数。紧凑满行时持续匀速；语义短行按实际字数调整速度，每行内匀速、边界位置连续。不同长度的段落无法同时满足整本恒定像素速度和每字恒定时长，本实现优先逐字节奏。
-- 支持开始／停止、按当前视觉行前后跳转、读完停止及重读。暂停时文字和光标同时停止；后台暂停保存，设置窗口暂停。字号/行数/模式/方向变化保持同一个源字符及小数进度。
+- 多行连续引导阅读：正文不横向移动，光标沿行滑动、沿弧线返回下一行开头；窗口中心附近文字渐进放大，离开后恢复。默认 240 字/分钟，不自动播放。
+- 三种离线排版：语义段落保留原始段落、首行缩进、英文词间隔，并尽量避免标点出现在行首；紧凑排列保留标点、去掉段落空白；无标点密排再去掉标点，连续排满。只改变显示，不改写原文，不使用联网 AI。
+- 设置宋体／黑体／楷体、18–64 px 字号、文字颜色、阅读区域背景、页面背景、最多2–12行、光标颜色、1–10字滑窗、1–2倍中心放大及30–1600字/分钟。按 Unicode 非标点字素计数（含数字、字母、emoji等）；标点与空白不计时，窗口覆盖字数也不计标点。组合emoji不拆开（旧内核回退到码点）。
+- 放大空间预先留好，不推动邻字；窗口不足一行时覆盖本行全部文字，不同时跨两行覆盖。字号过大可调小以容纳更多字。屏幕不足时实际显示行数小于设置上限，极大字号会临时缩小以容纳至少两行两列，原设置不变。
+- 上移、光标和放大共用一个动画时钟。正文用单调三次曲线连接各行位置，长短行边界保持位置和速度连续；同字数满行时匀速上移。光标扫读和弧线换行缓入缓出，换行时长包含在本行纯文字时长内，经过标点不额外停顿；这不代表逐字屏幕经过速度恒定。正文采用有界行缓冲与节点复用，避免逐字重建正文。
+- 支持开始／停止、按当前排版前后跳行（跳过纯标点行）、读完停止及重读。暂停时文字和光标同时停止；后台暂停保存，设置窗口暂停。字号/行数/窗口/模式/方向变化保持源字符时钟锚点及小数进度；光标的具体屏幕位置随新排版重新计算。仅含标点或空白时不自动阅读。
 - 手机横竖屏布局自动切换。需关闭 iPhone 的竖排方向锁定；App 不会强行锁定方向。动态文字仍可能引发不适，建议先用120–300字/分钟，出现不适立即暂停，不能保证消除头晕。
 - 书架支持批量导入、搜索、排序、阅读状态筛选、重命名和确认删除。
 - 网页版使用 IndexedDB 与 localStorage；独立 iOS 版使用私有文件夹与 Preferences。内容仅以纯文本渲染。
@@ -106,13 +106,13 @@
 
 ## 验证
 
-- `npm test`：26 项测试，覆盖段落保留、Unicode字素、多行排版、逐字时钟/上移坐标、编码、设置迁移、导入限制和原生存储适配器（插件模拟，并非真机）。
+- `npm test`：覆盖段落保留、Unicode字素、三种排版、标点不计时、1–10字窗口、弧线位置/速度连续性、中心渐进放大、源锚点、编码、设置迁移、导入限制和原生存储适配器（插件模拟，并非真机）。
 - `python -m unittest discover -s tests -p test_ios_packaging.py -v`：7 项云打包脚本测试，覆盖真机目标、未签名参数、Xcode 选择、失败退出码、IPA 文件结构及执行权限；不代表已完成 Xcode 编译。
 - `python scripts/build_unsigned_ios.py --check-only`：Windows 可执行的源码完整性与共享 scheme 检查。真正的归档需在 GitHub macOS 构建机运行。
 - `npm run build`：严格 TypeScript 检查和网页生产构建。
 - `npm run build:ios` / `npm run ios:check`：构建/检查原生离线资源；`npm run ios:sync` 同步到 Xcode 工程。上述命令不是 iOS 二进制编译。
-- `python tests/native_offline.py`：不启动服务器，用包内文件拦截资源请求，在全新上下文验证 TXT/DOCX/中文 PDF 首次导入及重启。Chromium 使用 `offline=True`；Windows WebKit 因离线导航拦截内核错误，改用只提供包内资源并阻断其他请求。此测试不验证原生文件选择器、签名或真实 WKWebView 桥接。
+- `python tests/native_offline.py`：先执行 `npm run build:ios`。不启动服务器，用包内文件拦截资源请求，在全新上下文验证 TXT/DOCX/中文 PDF 首次导入、10字窗口、无标点模式及源锚点续读。Chromium 使用 `offline=True`；Windows WebKit 因离线导航拦截内核错误，改用只提供包内资源并阻断其他请求。此测试不验证原生文件选择器、签名或真实 WKWebView 桥接。
 - `npm audit --omit=dev`：生产依赖安全检查。
-- 浏览器测试：安装 Python 的 `playwright` 包及 Chromium / WebKit 浏览器，先启动 `npm run preview`，再执行 `python tests/e2e.py http://localhost:4173`。覆盖真实格式导入、逐字时钟、整字光标覆盖、放大、匀速上移、语义/紧凑排版、行数上限、暂停/续读/重读、书籍管理、安全渲染、离线 PDF 和手机横竖屏。截图输出到 `artifacts`。
+- 浏览器测试：安装依赖 `python -m pip install playwright` 和浏览器 `python -m playwright install chromium webkit`，先执行 `npm run build`，启动 `npm run preview -- --host 127.0.0.1 --port 4173`，再执行 `python tests/e2e.py http://127.0.0.1:4173`。覆盖真实格式导入、连续光标/弧线运动、节点复用、纯文字计时、1/5/10字窗口、三种排版、行缓冲上限、暂停/续读/重读、书籍管理、安全渲染、离线 PDF、窄屏预览和横竖屏。截图及运动采样输出到 `artifacts`；坐标连续性通过不代表 iPhone 真机帧率和舒适度通过。
 
 源码首行含版权注释。`package.json` 不支持注释，使用首行 `"//"` 版权字段；自动生成文件、第三方资源和二进制图片保持原生格式。

@@ -57,14 +57,23 @@ def main():
             page.get_by_role('button', name='阅读《离线中文》', exact=True).click()
             expect(page.locator('.flowing-text')).to_contain_text('完全离线')
             assert_reader_layout(page)
+            page.get_by_role('button', name='阅读设置', exact=True).click()
+            page.get_by_role('button', name='无标点密排', exact=True).click()
+            page.locator('#cursor-words').fill('10')
+            page.get_by_role('button', name='完成设置').click()
             page.get_by_role('button', name='开始', exact=True).click()
             page.wait_for_timeout(250)
             page.get_by_role('button', name='停止', exact=True).click()
+            source = float(page.locator('.reading-band').get_attribute('data-source'))
             page.get_by_role('button', name='返回书架').click()
             page.reload()
             expect(page.locator('.book-card')).to_have_count(6)
             page.get_by_role('button', name='继续阅读', exact=True).click()
             expect(page.locator('.flowing-text')).to_contain_text('完全离线')
+            assert abs(float(page.locator('.reading-band').get_attribute('data-source')) - source) < 0.0001
+            expect(page.locator('.reading-band')).to_have_attribute('data-mode', 'plain')
+            expect(page.locator('.reading-band')).to_have_attribute('data-cursor-words', '10')
+            expect(page.locator('.reading-glyph[data-word="-1"]')).to_have_count(0)
             assert not errors, errors
             assert not external, external
             assert not missing, missing

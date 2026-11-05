@@ -26,9 +26,10 @@ export type Settings = {
   pageColor: string;
   speed: number;
   maxLines: number;
-  layoutMode: 'semantic' | 'compact';
+  layoutMode: 'semantic' | 'compact' | 'plain';
   cursorColor: string;
   cursorScale: number;
+  cursorWords: number;
 };
 
 export const fonts = {
@@ -42,7 +43,7 @@ export const MAX_READING_SPEED = 1600;
 export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
   lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
-  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorScale: 1.35,
+  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorScale: 1.35, cursorWords: 1,
 };
 
 export const themes = [
@@ -66,9 +67,10 @@ export function validateSettings(value: unknown): Settings {
     lineColor: color(v.lineColor, defaultSettings.lineColor),
     pageColor: color(v.pageColor, defaultSettings.pageColor),
     maxLines: Math.round(number(v.maxLines, 2, 12, defaultSettings.maxLines)),
-    layoutMode: v.layoutMode === 'compact' ? 'compact' : 'semantic',
+    layoutMode: v.layoutMode === 'compact' || v.layoutMode === 'plain' ? v.layoutMode : 'semantic',
     cursorColor: color(v.cursorColor, defaultSettings.cursorColor),
     cursorScale: number(v.cursorScale, 1, 2, defaultSettings.cursorScale),
+    cursorWords: Math.round(number(v.cursorWords, 1, 10, defaultSettings.cursorWords)),
   };
 }
 

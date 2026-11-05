@@ -80,12 +80,33 @@ def assert_reader_layout(page):
     visible = int(page.locator('.reading-band').get_attribute('data-visible-lines'))
     maximum = int(page.locator('.reading-band').get_attribute('data-max-lines'))
     assert 2 <= visible <= maximum
-    assert page.locator('.reading-row').count() <= visible
+    assert page.locator('.reading-row').count() <= visible + 5
     assert page.locator('.reader-controls button').count() == 3
     assert page.locator('.flowing-text').evaluate('(e) => new DOMMatrix(getComputedStyle(e).transform).m41') == 0
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     expect(page.locator('.reading-glyph.is-current')).to_have_count(1)
-    assert page.locator('.scan-cursor').evaluate('e => {const c=e.getBoundingClientRect(),g=document.querySelector(".is-current > span").getBoundingClientRect();return g.left>=c.left-1&&g.right<=c.right+1&&g.top>=c.top-1&&g.bottom<=c.bottom+1;}')
+    assert page.locator('.scan-cursor').evaluate('e => {const c=e.getBoundingClientRect(),g=document.querySelector(".reading-grid").getBoundingClientRect();return c.width>0&&c.left>=g.left-1&&c.right<=g.right+1;}')
+
+
+def sample_motion(page, duration):
+    return page.evaluate('''duration => new Promise(resolve => {
+        const samples=[]; let started, previousNodes=new Map();
+        const tick=time=>{
+            started??=time;
+            const band=document.querySelector('.reading-band');
+            const cursor=document.querySelector('.scan-cursor');
+            const matrix=new DOMMatrix(getComputedStyle(cursor).transform);
+            const nodes=new Map([...document.querySelectorAll('.reading-row')].map(e=>[e.dataset.row,e]));
+            const parent=new DOMMatrix(getComputedStyle(document.querySelector('.flowing-text')).transform);
+            const rows=Object.fromEntries([...nodes].map(([key,e])=>[key,{x:parent.m41,y:parent.m42+parseFloat(getComputedStyle(e).top)}]));
+            const replaced=[...nodes].some(([key,e])=>previousNodes.has(key)&&previousNodes.get(key)!==e);
+            previousNodes=nodes;
+            samples.push({time, position:Number(band.dataset.position), scroll:Number(band.dataset.scroll),
+                x:matrix.m41,y:matrix.m42,width:cursor.getBoundingClientRect().width,phase:cursor.dataset.phase,
+                rows,replaced,focus:[...document.querySelectorAll('.reading-glyph')].map(e=>Number(e.dataset.focus))});
+            if(time-started>duration)resolve(samples);else requestAnimationFrame(tick);
+        };requestAnimationFrame(tick);
+    })''', duration)
 
 
 def assert_guided_reading(page, engine):
@@ -108,29 +129,34 @@ def assert_guided_reading(page, engine):
     cols = int(page.locator('.reading-band').get_attribute('data-columns'))
     assert page.locator('.reading-row').first.locator('[data-char]').count() == cols
     page.get_by_role('button', name='开始', exact=True).click()
-    samples = page.evaluate('''() => new Promise(resolve => {
-        const samples=[]; let started;
-        const tick=time=>{
-            started??=time;
-            const band=document.querySelector('.reading-band');
-            const cell=document.querySelector('.is-current');
-            const glyph=cell.firstElementChild.getBoundingClientRect();
-            const cursor=document.querySelector('.scan-cursor').getBoundingClientRect();
-            samples.push({time, position:Number(band.dataset.position), scroll:Number(band.dataset.scroll), active:Number(cell.dataset.char), x:new DOMMatrix(getComputedStyle(document.querySelector('.flowing-text')).transform).m41,
-                covered:glyph.left>=cursor.left-1&&glyph.right<=cursor.right+1&&glyph.top>=cursor.top-1&&glyph.bottom<=cursor.bottom+1});
-            if(time-started>2200)resolve(samples);else requestAnimationFrame(tick);
-        };requestAnimationFrame(tick);
-    })''')
+    samples = sample_motion(page, max(2400, cols * 220))
     height = float(page.locator('.reading-band').get_attribute('data-line-height'))
-    assert samples[-1]['position'] - samples[0]['position'] > 15
+    cell_width = float(page.locator('.reading-band').get_attribute('data-cell-width'))
+    assert samples[-1]['position'] - samples[0]['position'] > cols * 2
+    assert any(sample['phase'] == 'return' for sample in samples)
+    fractional_moves = 0
     for previous, current in zip(samples, samples[1:]):
         delta = min(0.1, (current['time'] - previous['time']) / 1000)
-        assert abs(current['position'] - previous['position'] - 10 * delta) < 0.2, (previous, current)
-        assert abs(current['scroll'] - previous['scroll'] - (current['position'] - previous['position']) * height / cols) < 0.05
-        assert current['active'] == int(current['position']) and current['covered'] and current['x'] == 0
+        advance = current['position'] - previous['position']
+        assert abs(advance - 10 * delta) < 0.2, (previous, current)
+        assert abs(current['scroll'] - previous['scroll'] - advance * height / cols) < 0.05
+        assert abs(current['x'] - previous['x']) / cell_width <= cols * advance * 1.2 + 0.01
+        assert abs(current['y'] - previous['y']) / height <= 2 * advance + 0.01
+        assert abs(current['width'] - cell_width) < 0.1
+        assert not current['replaced']
+        assert len(current['rows']) <= 9
+        assert all(0 <= weight <= 1 for weight in current['focus'])
+        column = current['x'] / cell_width
+        if abs(column - round(column)) > 0.001 and abs(current['x'] - previous['x']) > 0.001:
+            fractional_moves += 1
+        for row in current['rows'].keys() & previous['rows'].keys():
+            assert current['rows'][row]['x'] == 0
+            assert abs(current['rows'][row]['y'] - previous['rows'][row]['y'] + current['scroll'] - previous['scroll']) < 0.02
+    (ARTIFACTS / f'{engine}-motion-samples.json').write_text(json.dumps(samples), encoding='utf-8')
+    assert fractional_moves > len(samples) * 0.6, (engine, fractional_moves, len(samples), cols)
     page.get_by_role('button', name='停止', exact=True).click()
     saved = position(page)
-    source = page.locator('.is-current').get_attribute('data-source')
+    source = page.locator('.reading-band').get_attribute('data-source')
     page.wait_for_timeout(250)
     assert position(page) == saved
     page.get_by_role('button', name='返回书架').click()
@@ -140,11 +166,36 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='阅读设置', exact=True).click()
     expect(page.locator('#max-lines')).to_have_value('4')
     expect(page.locator('#cursor-scale')).to_have_value('1.5')
+    expect(page.locator('#cursor-words')).to_have_value('1')
+    page.get_by_role('button', name='无标点密排', exact=True).click()
+    page.locator('#cursor-words').fill('10')
+    page.locator('#font-size').fill('18')
+    page.locator('#cursor-scale').fill('1')
+    page.get_by_role('button', name='完成设置').click()
+    expect(page.locator('.reading-band')).to_have_attribute('data-mode', 'plain')
+    expect(page.locator('.reading-band')).to_have_attribute('data-source', source)
+    expect(page.locator('.scan-cursor')).to_have_attribute('data-span', '10')
+    assert page.locator('.reading-glyph[data-word="-1"]').count() == 0
+    page.get_by_role('button', name='开始', exact=True).click()
+    wide_samples = sample_motion(page, 1000)
+    assert all(abs(sample['width'] - 10 * float(page.locator('.reading-band').get_attribute('data-cell-width'))) < 0.1 for sample in wide_samples)
+    page.get_by_role('button', name='停止', exact=True).click()
+    saved = position(page)
+    source = page.locator('.reading-band').get_attribute('data-source')
+    page.get_by_role('button', name='返回书架').click()
+    page.reload()
+    page.get_by_role('button', name='继续阅读', exact=True).click()
+    assert abs(position(page) - saved) < 0.0001
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    expect(page.locator('#cursor-words')).to_have_value('10')
+    expect(page.get_by_role('button', name='无标点密排', exact=True)).to_have_attribute('aria-pressed', 'true')
+    page.locator('#cursor-words').fill('5')
+    page.locator('#cursor-scale').fill('1.5')
     page.get_by_role('button', name='语义段落', exact=True).click()
     page.locator('#max-lines').fill('12')
     page.locator('#font-size').fill('44')
     page.get_by_role('button', name='完成设置').click()
-    expect(page.locator('.is-current')).to_have_attribute('data-source', source)
+    expect(page.locator('.reading-band')).to_have_attribute('data-source', source)
     assert abs(position(page) - saved) < 0.0001
     page.screenshot(path=str(ARTIFACTS / f'{engine}-multiline-reader.png'))
     page.get_by_role('button', name='阅读设置', exact=True).click()
@@ -156,18 +207,27 @@ def assert_guided_reading(page, engine):
     page.set_viewport_size({'width': 844, 'height': 390})
     page.wait_for_timeout(180)
     assert_reader_layout(page)
-    expect(page.locator('.is-current')).to_have_attribute('data-source', source)
+    expect(page.locator('.reading-band')).to_have_attribute('data-source', source)
     page.screenshot(path=str(ARTIFACTS / f'{engine}-multiline-landscape.png'))
     page.set_viewport_size({'width': 320, 'height': 568})
     page.wait_for_timeout(180)
     assert_reader_layout(page)
-    expect(page.locator('.is-current')).to_have_attribute('data-source', source)
+    expect(page.locator('.reading-band')).to_have_attribute('data-source', source)
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.locator('#cursor-words').fill('10')
+    assert page.locator('.settings-preview').evaluate('e => {const box=e.getBoundingClientRect();return [...e.querySelectorAll(".preview-window > span")].every(s=>{const b=s.getBoundingClientRect();return b.left>=box.left&&b.right<=box.right;});}')
+    page.locator('.settings-preview').scroll_into_view_if_needed()
+    page.screenshot(path=str(ARTIFACTS / f'{engine}-narrow-preview.png'))
+    page.get_by_role('button', name='完成设置').click()
     page.set_viewport_size({'width': 844, 'height': 390})
     page.wait_for_timeout(180)
     page.get_by_role('button', name='开始', exact=True).click()
-    before = position(page)
-    page.wait_for_timeout(500)
-    assert position(page) > before + 8
+    fast_samples = sample_motion(page, 800)
+    assert fast_samples[-1]['position'] > fast_samples[0]['position']
+    for previous, current in zip(fast_samples, fast_samples[1:]):
+        delta = min(0.1, (current['time'] - previous['time']) / 1000)
+        assert abs(current['position'] - previous['position'] - 1600 / 60 * delta) < 0.2
+    (ARTIFACTS / f'{engine}-fast-motion-samples.json').write_text(json.dumps(fast_samples), encoding='utf-8')
     page.get_by_role('button', name='阅读设置', exact=True).click()
     paused = position(page)
     page.wait_for_timeout(200)
@@ -192,8 +252,48 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='停止', exact=True).click()
     assert position(page) < 3
     assert_reader_layout(page)
+    expect(page.locator('.reading-band')).to_have_attribute('data-total', '2')
     page.get_by_role('button', name='返回书架').click()
-    print(f'PASS {engine}: per-character timing, full-cell cursor/zoom, uniform upward motion, bounded rows, semantic/compact, resume, orientation, 1600 chars/min, completion/restart')
+    upload(page, '密集标点.txt', '“甲”，……！！\n（乙）？！'.encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《密集标点》', exact=True).click()
+    for mode in ['语义段落', '紧凑排列', '无标点密排']:
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        page.get_by_role('button', name=mode, exact=True).click()
+        page.locator('#cursor-words').fill('10')
+        page.get_by_role('button', name='完成设置').click()
+        expect(page.locator('.reading-band')).to_have_attribute('data-total', '2')
+        if mode == '无标点密排':
+            expect(page.locator('.flowing-text')).to_have_text('甲乙')
+        else:
+            assert page.locator('.reading-glyph[data-word="-1"]').count() > 0
+        print(f'CHECK {engine}: punctuation timing / {mode}', flush=True)
+        elapsed = page.evaluate('''() => new Promise((resolve,reject) => {
+            const button=document.querySelector('.play-button'), started=performance.now();
+            let animation;
+            const timeout=setTimeout(()=>{
+                cancelAnimationFrame(animation);
+                reject(new Error(JSON.stringify({reason:'reading timeout',hidden:document.hidden,
+                    button:button.getAttribute('aria-label'),disabled:button.disabled,
+                    band:{...document.querySelector('.reading-band').dataset}})));
+            },5000);
+            button.click();
+            const tick=()=>{
+                if(Number(document.querySelector('.reading-band').dataset.position)===2){clearTimeout(timeout);resolve(performance.now()-started);}
+                else animation=requestAnimationFrame(tick);
+            };
+            animation=requestAnimationFrame(tick);
+        })''')
+        assert 450 <= elapsed <= 950, (mode, elapsed)
+    page.get_by_role('button', name='返回书架').click()
+    upload(page, '仅标点.txt', '……，。！？'.encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《仅标点》', exact=True).click()
+    expect(page.get_by_role('button', name='开始', exact=True)).to_be_disabled()
+    expect(page.locator('.line-counter')).to_contain_text('没有可计数的文字')
+    expect(page.locator('.scan-cursor')).to_be_hidden()
+    page.get_by_role('button', name='返回书架').click()
+    print(f'PASS {engine}: continuous cursor/arc, stable DOM rows, punctuation-free timing, 1/5/10-word windows, three layouts, resume, orientation, 1600 chars/min, completion/restart')
 
 
 def main():
@@ -272,8 +372,13 @@ def main():
                 print('PASS Chromium PWA offline reload and PDF import')
             else:
                 print('SKIP Windows WebKit offline=True PWA reload: internal navigation error; native_offline.py separately validates bundled-resource-only loading')
-            assert_guided_reading(page, engine.name)
-            assert not errors, errors
+            try:
+                assert_guided_reading(page, engine.name)
+                assert not errors, errors
+            except Exception:
+                page.screenshot(path=str(ARTIFACTS / f'{engine.name}-failure.png'))
+                print(json.dumps({'engine': engine.name, 'page_errors': errors}, ensure_ascii=False), flush=True)
+                raise
             print(f'PASS {engine.name}: TXT/DOCX/PDF/CJK PDF, duplicates, errors, XSS, rename/delete')
             context.close()
             browser.close()
@@ -281,4 +386,18 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    from datetime import datetime, timezone
+
+    result_path = ARTIFACTS / 'e2e-result.json'
+    result = {'status': 'running', 'started': datetime.now(timezone.utc).isoformat()}
+    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    try:
+        main()
+    except Exception as error:
+        result.update(status='failed', error=str(error))
+        raise
+    else:
+        result.update(status='passed', browsers=['chromium', 'webkit'], skipped=['Windows WebKit offline=True PWA reload'])
+    finally:
+        result['finished'] = datetime.now(timezone.utc).isoformat()
+        result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')

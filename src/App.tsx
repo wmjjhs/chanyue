@@ -135,7 +135,7 @@ export default function App() {
         <div className="sidebar-bottom">
           <div className="sidebar-note"><span className="little-branch"><Leaf size={27} strokeWidth={1} /></span><p>读书不觉已春深，<br />一寸光阴一寸金。</p><span>让心慢下来，让文字流淌。</span></div>
           <div className="local-indicator"><span /><span>本地书库 · 安心私享</span><ShieldCheck size={15} /></div>
-          <div className="sidebar-version">禅阅 CHAN YUE <span>v1.1</span></div>
+          <div className="sidebar-version">禅阅 CHAN YUE <span>v1.2</span></div>
         </div>
       </aside>
       <div className="workspace">

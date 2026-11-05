@@ -1,7 +1,8 @@
 // 版权所有：波哥
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, MAX_READING_SPEED, progressOf, splitLines, validateSettings } from './model';
-import { createDocument, glyphPosition, initialPosition, layoutDocument, readingMetrics, scanFrame, sourcePosition } from './reading-layout';
+import { createDocument, glyphPosition, initialPosition, layoutDocument, readingMetrics, sourcePosition } from './reading-layout';
+import { buildMotion, focusWeight, motionFrame } from './reading-motion';
 import { decodeText, importBook } from './importer';
 import { sampleBooks } from './samples';
 
@@ -36,6 +37,14 @@ describe('阅读设置与进度', () => {
     expect(validateSettings({ ...defaultSettings, maxLines: 999, cursorScale: 9, cursorColor: 'url(x)' }))
       .toMatchObject({ maxLines: 12, cursorScale: 2, cursorColor: defaultSettings.cursorColor });
   });
+  it('窗口字数限制1–10，旧v2设置保留字速并默认1字窗口', () => {
+    expect(validateSettings({ version: 2, speed: 600 })).toMatchObject({ speed: 600, cursorWords: 1 });
+    for (const [input, output] of [[0, 1], [11, 10], [4.6, 5], [NaN, 1], [Infinity, 1]]) {
+      expect(validateSettings({ ...defaultSettings, cursorWords: input }).cursorWords).toBe(output);
+    }
+    expect(validateSettings({ layoutMode: 'plain' }).layoutMode).toBe('plain');
+    expect(validateSettings({ layoutMode: 'unknown' }).layoutMode).toBe('semantic');
+  });
   it('已读完标记显示 100%', () => {
     expect(progressOf(sampleBooks[0])).toBe(0);
     expect(progressOf({ ...sampleBooks[0], completed: true })).toBe(100);
@@ -64,26 +73,29 @@ describe('多行逐字阅读', () => {
   it('排版变化不改变字符锚点和小数进度', () => {
     const doc = createDocument(['你好 world', '🌱新段落。']);
     const source = sourcePosition(doc, 8.375);
-    for (const mode of ['semantic', 'compact'] as const) {
+    for (const mode of ['semantic', 'compact', 'plain'] as const) {
       for (const width of [2, 8, 20]) {
         const layout = layoutDocument(doc, width, mode);
         expect(glyphPosition(doc, source)).toBeCloseTo(8.375);
-        expect(layout.rows.at(-1)?.end).toBe(doc.glyphs.length);
+        expect(layout.rows.at(-1)?.wordEnd).toBe(doc.words.length);
       }
     }
     expect(initialPosition({ ...sampleBooks[0], lines: ['你好 world', '🌱新段落。'], line: 1, character: undefined }, doc)).toBe(7);
   });
-  it('同一行内匀速上移，换行边界连续且不会漏字', () => {
-    const layout = layoutDocument(createDocument(['甲乙丙丁戊己庚辛'.repeat(20)]), 8, 'compact');
-    expect(scanFrame(layout, 2, 64).scroll - scanFrame(layout, 1, 64).scroll).toBe(8);
-    expect(scanFrame(layout, 8, 64).scroll).toBe(64);
-    expect(scanFrame(layout, 8, 64).scroll - scanFrame(layout, 7.999, 64).scroll).toBeCloseTo(0.008);
-    expect(scanFrame(layout, 22.5, 64).active).toBe(22);
+  it('满行时持续匀速上移，行边界连续', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛'.repeat(20)]);
+    const motion = buildMotion(doc, layoutDocument(doc, 8, 'compact'), 1);
+    expect(motionFrame(motion, 2).scroll - motionFrame(motion, 1).scroll).toBe(1 / 8);
+    expect(motionFrame(motion, 8).scroll).toBe(1);
+    expect(motionFrame(motion, 8).scroll - motionFrame(motion, 7.999).scroll).toBeCloseTo(0.001 / 8);
   });
-  it('短段落按实际字数计算上移速度，位置连续', () => {
-    const layout = layoutDocument(createDocument(['甲', '乙丙丁']), 8, 'semantic');
-    expect(scanFrame(layout, 1, 60).scroll).toBe(60);
-    expect(scanFrame(layout, 1.5, 60).scroll).toBe(70);
+  it('短段落只改变上移曲线，不改变纯字阅读总时长', () => {
+    const doc = createDocument(['甲，。', '乙丙丁！']);
+    const motion = buildMotion(doc, layoutDocument(doc, 8, 'semantic'), 1);
+    expect(motion.total).toBe(4);
+    expect(motionFrame(motion, 1).scroll).toBe(1);
+    expect(motionFrame(motion, 1.5).scroll).toBeGreaterThan(1);
+    expect(motionFrame(motion, 4).progress).toBe(1);
   });
   it('小屏大字与放大仍保留两行，最大行数限制有效', () => {
     const metrics = readingMetrics(700, 180, { ...defaultSettings, fontSize: 64, cursorScale: 2, maxLines: 12 });
@@ -93,6 +105,128 @@ describe('多行逐字阅读', () => {
     expect(readingMetrics(900, 1000, { ...defaultSettings, maxLines: 3 }).visibleLines).toBe(3);
     const narrow = readingMetrics(272, 600, { ...defaultSettings, fontSize: 64, cursorScale: 2 });
     expect(narrow.columns * narrow.cellWidth + 32).toBeLessThanOrEqual(272);
+  });
+});
+
+describe('连续滑窗与纯文字时钟', () => {
+  it('中英文标点不计字数，数字、字母和组合emoji保留', () => {
+    const doc = createDocument(['“甲，乙。” (A-1)… e\u0301 👨‍👩‍👧‍👦']);
+    expect(doc.words.map(index => doc.glyphs[index])).toEqual(['甲', '乙', 'A', '1', 'e\u0301', '👨‍👩‍👧‍👦']);
+    expect(doc.wordOrdinal.filter(index => index >= 0)).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+  it('密排只隐藏标点和空白，不修改原文或源字符偏移', () => {
+    const lines = ['甲，乙。', '“A B”！'];
+    const doc = createDocument(lines);
+    const layout = layoutDocument(doc, 3, 'plain');
+    expect(layout.rows.map(row => row.glyphs.map(index => doc.glyphs[index]).join(''))).toEqual(['甲乙A', 'B']);
+    expect(layout.rows[0].columns).toEqual([0, 1, 2]);
+    expect(layout.rows.flatMap(row => row.glyphs.map(index => doc.offsets[index]))).toEqual([0, 2, 6, 8]);
+    expect(lines).toEqual(['甲，乙。', '“A B”！']);
+    expect(doc.glyphs.join('')).toBe('甲，乙。“AB”！');
+  });
+  it('标点前后的小数进度可往返，旧行锚点与完成状态兼容', () => {
+    const doc = createDocument(['“甲，。乙！”', '丙丁。']);
+    for (const position of [0, 0.125, 0.99, 1.25, 2, 3.9, 4]) {
+      expect(glyphPosition(doc, sourcePosition(doc, position))).toBeCloseTo(position, 5);
+    }
+    expect(initialPosition({ ...sampleBooks[0], character: undefined, line: 1 }, doc)).toBe(2);
+    expect(initialPosition({ ...sampleBooks[0], completed: true }, doc)).toBe(4);
+  });
+  it('1–10字窗口的纯文字宽度正确，沿行连续移动而非逐格跳动', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸'.repeat(6)]);
+    const layout = layoutDocument(doc, 20, 'compact');
+    for (let span = 1; span <= 10; span++) {
+      const motion = buildMotion(doc, layout, span);
+      for (const clock of [0, 0.25, 2.5, 10.125, 18.5, 19.9, 20]) {
+        expect(motionFrame(motion, clock).width).toBeCloseTo(span);
+      }
+      const before = motionFrame(motion, 2.25);
+      const after = motionFrame(motion, 2.251);
+      expect(after.x).toBeGreaterThan(before.x);
+      expect(after.x - before.x).toBeLessThan(0.01);
+      expect(motion.total).toBe(60);
+    }
+  });
+  it('窗口覆盖文字时跨过中间标点，短行不足时覆盖全行', () => {
+    const doc = createDocument(['甲，乙，丙，丁，戊。']);
+    const layout = layoutDocument(doc, 20, 'compact');
+    const motion = buildMotion(doc, layout, 3);
+    expect(motionFrame(motion, 0)).toMatchObject({ x: 0, width: 5, span: 3 });
+    expect(motionFrame(motion, motion.total)).toMatchObject({ x: 4, width: 6 });
+    expect(motionFrame(buildMotion(doc, layout, 10), 0)).toMatchObject({ x: 0, width: 10, span: 5 });
+    expect(motion.total).toBe(5);
+  });
+  it('长短行和密集标点下，上移保持单调且边界速度连续', () => {
+    const doc = createDocument(['甲，。', '乙丙丁戊己庚辛壬癸', '！！！！！', '子', '丑寅卯辰巳午未申酉戌亥']);
+    const motion = buildMotion(doc, layoutDocument(doc, 8, 'semantic'), 5);
+    let previous = -1;
+    for (let clock = 0; clock <= motion.total; clock += 0.02) {
+      const frame = motionFrame(motion, clock);
+      expect(frame.scroll).toBeGreaterThanOrEqual(previous);
+      expect(frame.width).toBeGreaterThan(0);
+      previous = frame.scroll;
+    }
+    const epsilon = 0.00001;
+    for (const time of motion.starts.slice(1)) {
+      const before = motionFrame(motion, time - epsilon).scroll;
+      const at = motionFrame(motion, time).scroll;
+      const after = motionFrame(motion, time + epsilon).scroll;
+      expect((at - before) / epsilon).toBeCloseTo((after - at) / epsilon, 3);
+    }
+  });
+  it('扫读、弧线返回和下行起点位置及速度连续', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸，。', '子丑寅卯辰巳午未申酉戌亥']);
+    for (const span of [1, 5, 10]) {
+      const motion = buildMotion(doc, layoutDocument(doc, 8, 'semantic'), span);
+      const epsilon = 0.00001;
+      for (const row of motion.rows.slice(0, -1)) {
+        for (const time of [row.scanEnd, row.end]) {
+          const before = motionFrame(motion, time - epsilon);
+          const at = motionFrame(motion, time);
+          const after = motionFrame(motion, time + epsilon);
+          for (const key of ['x', 'y', 'width', 'scroll'] as const) {
+            expect(Math.abs(at[key] - before[key])).toBeLessThan(0.0001);
+            expect(Math.abs(after[key] - at[key])).toBeLessThan(0.0001);
+            expect((at[key] - before[key]) / epsilon).toBeCloseTo((after[key] - at[key]) / epsilon, 2);
+          }
+        }
+      }
+      const row = motion.rows[0];
+      const middle = motionFrame(motion, (row.scanEnd + row.end) / 2);
+      expect(middle.turning).toBe(true);
+      expect(middle.y).toBeGreaterThan((row.rowIndex + motion.rows[1].rowIndex) / 2);
+    }
+  });
+  it('中心渐进放大，两侧对称衰减，换行前后无缩放跳变', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛'.repeat(4)]);
+    const motion = buildMotion(doc, layoutDocument(doc, 8, 'compact'), 5);
+    const frame = motionFrame(motion, 0);
+    expect(focusWeight(2, 0, frame)).toBe(1);
+    expect(focusWeight(1, 0, frame)).toBeGreaterThan(focusWeight(0, 0, frame));
+    expect(focusWeight(1, 0, frame)).toBe(focusWeight(3, 0, frame));
+    expect(focusWeight(7, 0, frame)).toBe(0);
+    for (const time of [motion.rows[0].scanEnd, motion.rows[0].end]) {
+      for (let row = 0; row <= 1; row++) {
+        for (let column = 0; column < 8; column++) {
+          expect(focusWeight(column, row, motionFrame(motion, time - 0.00001)))
+            .toBeCloseTo(focusWeight(column, row, motionFrame(motion, time + 0.00001)), 4);
+        }
+      }
+    }
+  });
+  it('三种排版和窗口宽度不影响总字数，纯标点及空正文安全', () => {
+    for (const text of ['甲，乙。丙！', '，。！？……', '']) {
+      const doc = createDocument([text]);
+      for (const mode of ['semantic', 'compact', 'plain'] as const) {
+        for (const span of [1, 5, 10]) {
+          const motion = buildMotion(doc, layoutDocument(doc, 3, mode), span);
+          expect(motion.total).toBe(text.startsWith('甲') ? 3 : 0);
+          const frame = motionFrame(motion, motion.total);
+          expect(Object.values(frame).every(value => typeof value !== 'number' || Number.isFinite(value))).toBe(true);
+          if (!doc.words.length) expect(frame.span).toBe(0);
+        }
+      }
+    }
   });
 });
 
