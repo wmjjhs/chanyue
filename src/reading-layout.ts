@@ -169,9 +169,11 @@ export function readingMetrics(width: number, height: number, settings: Settings
   const halfHeight = Math.floor(height / 2);
   const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(halfHeight / lineFactor, halfHeight - underlineSpace, Math.floor((width - 32) / 2) / cellFactor)));
   const cellWidth = Math.ceil(fontSize * cellFactor);
-  const lineHeight = Math.ceil(Math.max(fontSize * lineFactor, fontSize + underlineSpace));
+  const minimumLineHeight = Math.ceil(Math.max(fontSize * lineFactor, fontSize + underlineSpace));
+  const visibleLines = Math.max(2, Math.min(settings.maxLines, Math.floor(height / minimumLineHeight)));
+  const lineHeight = Math.max(minimumLineHeight, height / visibleLines);
   const underlineOffset = (lineHeight + fontSize) / 2 + 2;
-  const visibleLines = Math.max(2, Math.min(settings.maxLines, Math.floor(height / lineHeight)));
+  const cursorRow = Math.min(settings.cursorRow, visibleLines);
   const columns = Math.max(2, Math.floor((width - 32) / cellWidth));
-  return { fontSize, cellWidth, lineHeight, underlineOffset, visibleLines, columns };
+  return { fontSize, cellWidth, lineHeight, underlineOffset, visibleLines, cursorRow, columns };
 }

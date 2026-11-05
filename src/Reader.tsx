@@ -180,8 +180,8 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       <button className="icon-button reader-settings" aria-label="阅读设置" title="阅读设置" onClick={() => { pause(); onSettings(); }}><SlidersHorizontal size={20} /></button>
     </header>
     <main className="reading-workspace" ref={space}>
-      <div className="reading-band multiline-band" ref={band} data-testid="reading-band" data-max-lines={settings.maxLines} data-visible-lines={metrics.visibleLines} data-line-height={metrics.lineHeight} data-cell-width={metrics.cellWidth} data-columns={metrics.columns} data-mode={settings.layoutMode} data-cursor-words={settings.cursorWords} data-cursor-mode={settings.cursorMode}
-        style={{ width: width + 32, height: metrics.lineHeight * metrics.visibleLines, background: settings.lineColor, color: settings.textColor, fontSize: metrics.fontSize, fontFamily: fonts[settings.font], '--cell-width': `${metrics.cellWidth}px`, '--line-height': `${metrics.lineHeight}px` } as CSSProperties}>
+      <div className="reading-band multiline-band" ref={band} data-testid="reading-band" data-max-lines={settings.maxLines} data-visible-lines={metrics.visibleLines} data-line-height={metrics.lineHeight} data-cell-width={metrics.cellWidth} data-columns={metrics.columns} data-mode={settings.layoutMode} data-cursor-words={settings.cursorWords} data-cursor-mode={settings.cursorMode} data-cursor-row={metrics.cursorRow} data-requested-cursor-row={settings.cursorRow} data-underline-offset={metrics.underlineOffset}
+        style={{ width: width + 32, height: '100%', background: settings.lineColor, color: settings.textColor, fontSize: metrics.fontSize, fontFamily: fonts[settings.font], '--cell-width': `${metrics.cellWidth}px`, '--line-height': `${metrics.lineHeight}px` } as CSSProperties}>
         <div className="reading-grid" style={{ width }}>
           <div className="flowing-text multiline-text" ref={text} aria-label="阅读正文" />
           <div className="scan-cursor" ref={cursor} aria-hidden="true" />

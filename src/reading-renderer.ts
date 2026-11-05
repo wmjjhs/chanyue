@@ -50,7 +50,8 @@ export class ReadingRenderer {
 
   paint(frame: ReturnType<typeof motionFrame>) {
     const { metrics: m } = this;
-    const first = Math.max(0, Math.floor(frame.scroll) - 2);
+    const anchor = m.cursorRow - 1;
+    const first = Math.max(0, Math.floor(frame.scroll - anchor) - 1);
     const last = Math.min(this.layout.rows.length, first + m.visibleLines + 5);
     const reusable: RowView[] = [];
     for (const [index, row] of this.rows) {
@@ -68,7 +69,7 @@ export class ReadingRenderer {
     let nearest: HTMLElement | null = null;
     let nearestDistance = Infinity;
     for (const [rowIndex, row] of this.rows) {
-      const top = `${(1 + rowIndex - first) * m.lineHeight}px`;
+      const top = `${(anchor + rowIndex - first) * m.lineHeight}px`;
       if (row.element.style.top !== top) row.element.style.top = top;
       if (this.settings.cursorMode === 'trail') {
         const range = trailRange(this.layout, rowIndex, frame);
@@ -91,7 +92,7 @@ export class ReadingRenderer {
     }
     this.cursor.hidden = this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
     this.cursor.style.width = `${frame.width * m.cellWidth}px`;
-    this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(1 + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
+    this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(anchor + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
     this.cursor.dataset.phase = 'scan';
     this.cursor.dataset.span = String(frame.span);
   }

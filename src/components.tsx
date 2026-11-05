@@ -1,7 +1,7 @@
 // 版权所有：波哥
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { BookOpen, X, RotateCcw, Check, Smartphone, ShieldCheck, MoveHorizontal, Download, HardDrive } from 'lucide-react';
-import { defaultSettings, fonts, MAX_READING_SPEED, MAX_CURSOR_WORDS, MAX_CURSOR_THICKNESS, MAX_VISIBLE_LINES, MIN_FONT_SIZE, themes, type Book, type Settings } from './model';
+import { defaultSettings, fonts, MAX_READING_SPEED, MAX_CURSOR_WORDS, MAX_CURSOR_THICKNESS, MAX_VISIBLE_LINES, MIN_FONT_SIZE, MIN_CURSOR_ROW, themes, type Book, type Settings } from './model';
 import { Capacitor } from '@capacitor/core';
 
 export function Brand({ compact = false }: { compact?: boolean }) {
@@ -83,9 +83,12 @@ export function SettingsPanel({ settings, onChange, onClose }: {
       <button aria-label="无标点密排" aria-pressed={settings.layoutMode === 'plain'} onClick={() => set('layoutMode', 'plain')}>无标点密排<small>去标点、去空白，连续排满</small></button>
     </div><label className="range-label" htmlFor="max-lines">最多显示行数 <output>{settings.maxLines} <small>行</small></output></label>
       <input id="max-lines" type="range" min="2" max={MAX_VISIBLE_LINES} value={settings.maxLines} onChange={e => set('maxLines', Number(e.target.value))} />
-      <p className="field-note">这是上限。空间不足时显示更少的行；每页按实际可显示行数计算，末页不足仍算一页。字号、排版或方向改变会重新分页，保留阅读位置。</p>
+      <p className="field-note">最多30行，空间不足时自动减少，不会为凑行数把字号缩到12px以下。行距随可用高度均匀分配，阅读区延伸至按钮上方。每页按实际显示行数计算；字号、排版或方向改变时保留阅读位置。</p>
     </section>
     <section className="settings-section"><h3>下划线与节奏</h3>
+      <label className="range-label" htmlFor="cursor-row">下划线停留行 <output>第 {settings.cursorRow} <small>行</small></output></label>
+      <input id="cursor-row" type="range" min={MIN_CURSOR_ROW} max={MAX_VISIBLE_LINES} step="1" value={settings.cursorRow} onChange={e => set('cursorRow', Number(e.target.value))} />
+      <p className="field-note">从上往下数，可选第2–30行。每行从所选位置开始，随正文在附近平滑上移；保留上一行空间，避免文字被顶部裁切。屏幕显示不足时临时使用最后可见行，恢复空间后自动回到所选行。指读与留痕均生效。</p>
       <div className="layout-options cursor-mode-options" role="group" aria-label="下划线模式">
         <button aria-label="指读" aria-pressed={settings.cursorMode === 'pointer'} onClick={() => set('cursorMode', 'pointer')}>指读<small>像笔尖指着读，经过不留痕</small></button>
         <button aria-label="划线留痕" aria-pressed={settings.cursorMode === 'trail'} onClick={() => set('cursorMode', 'trail')}>划线留痕<small>读到哪里画到哪里，保留已读线条</small></button>
@@ -113,7 +116,7 @@ export function Guide({ onClose }: { onClose: () => void }) {
   return <Modal title="一行之间，自在阅读" eyebrow="A LITTLE GUIDE / 使用指南" onClose={onClose} className="guide-modal">
     <p className="modal-description">不必追赶文字，让文字慢慢来到你面前。</p>
     <div className="guide-item"><BookOpen /><div><h3>把喜欢的书带进来</h3><p>支持 TXT（UTF-8、GB18030、带 BOM 的 UTF-16）、Word（.docx）和文字型 PDF。每本不超过 20 MB / 200 万字，PDF 不超过 2000 页。旧版 .doc 请另存为 .docx；扫描 PDF 需先做 OCR。只提取正文，不保留图表和原排版。</p></div></div>
-    <div className="guide-item"><MoveHorizontal /><div><h3>多行阅读，跟随滑动窗口</h3><p>语义模式保留段落、缩进和单词间隔；紧凑模式保留标点、去掉段落空白；无标点密排再去掉标点，连续排满，原文不变。排版不使用联网 AI；PDF 依提取换行，旧版书籍段落无法完整恢复，建议重新导入。指读模式像笔尖一样在文字下方持续前移，经过不留痕；划线留痕模式从行首逐渐画到已读位置，保留各行已画线条。两种模式都在换行时直接进入下一行文字下方，不飞行；正文持续上移，文字不放大、不变色。留痕按当前源阅读进度恢复，重排后重新定位，后退和重读时也随进度回退，不保存为永久批注。总时长只计算非标点文字（含数字、字母等），标点与空白不计时，换行不另加时间。设置可选12–64px字号、1–50字线条长度、最多2–15行、自选线条颜色或透明、1–6px粗细及30–1600字/分钟；短行不足时覆盖全行。阅读顶部仅保留返回、书名和设置；底部居中放置播放与翻页按钮，页码跳转及进度同处一行。旧放大配置会忽略，书库和源阅读进度不变。前后按钮与左右键改为翻页，每页按当前实际显示行数计算，尾部不足一页仍计一页；支持输入页码跳转，翻页后暂停。字号、排版或方向改变会重新统计页数，保留源阅读位置。空格开始或暂停。旧版像素速度会重置为舒缓默认值，旧进度从阅读行起点恢复。</p></div></div>
+    <div className="guide-item"><MoveHorizontal /><div><h3>多行阅读，跟随滑动窗口</h3><p>语义模式保留段落、缩进和单词间隔；紧凑模式保留标点、去掉段落空白；无标点密排再去掉标点，连续排满，原文不变。排版不使用联网 AI；PDF 依提取换行，旧版书籍段落无法完整恢复，建议重新导入。指读模式像笔尖一样在文字下方持续前移，经过不留痕；划线留痕模式从行首逐渐画到已读位置，保留各行已画线条。两种模式都在换行时直接进入下一行文字下方，不飞行；正文持续上移，文字不放大、不变色。留痕按当前源阅读进度恢复，重排后重新定位，后退和重读时也随进度回退，不保存为永久批注。总时长只计算非标点文字（含数字、字母等），标点与空白不计时，换行不另加时间。设置可选12–64px字号、1–50字线条长度、最多2–30行、下划线停留行第2–30行（不足时临时适配）、自选线条颜色或透明、1–6px粗细及30–1600字/分钟；短行不足时覆盖全行。阅读顶部仅保留返回、书名和设置；底部居中放置播放与翻页按钮，页码跳转及进度同处一行。旧放大配置会忽略，书库和源阅读进度不变。前后按钮与左右键改为翻页，每页按当前实际显示行数计算，尾部不足一页仍计一页；支持输入页码跳转，翻页后暂停。字号、排版或方向改变会重新统计页数，保留源阅读位置。空格开始或暂停。旧版像素速度会重置为舒缓默认值，旧进度从阅读行起点恢复。</p></div></div>
     <div className="guide-item"><Smartphone /><div><h3>{native ? '独立 App，打开就能读' : '在 iPhone 上，像应用一样使用'}</h3><p>{native ? '禅阅已安装在手机中，不需要 Safari 或电脑运行。关闭手机的竖排方向锁定后，转动设备即可切换横竖屏。' : '在 Safari 中打开，点「分享 → 添加到主屏幕」。关闭手机的竖排方向锁定后，转动设备即可切换横竖屏。'}</p></div></div>
     <div className="guide-item"><Download /><div><h3>把宁静留在离线时刻</h3><p>{native ? '阅读引擎、PDF 字库和示例书都随 App 安装，首次启动也无需联网。导入时选择「文件 → 我的 iPhone」中的本地文件；尚未下载的 iCloud 文件需要先联网下载。' : '正式部署到 HTTPS 后，首次访问等待资源缓存完成，即可离线打开。开发预览不启用离线缓存。若系统清理了缓存，再次联网打开即可。'}</p></div></div>
     <div className="guide-item"><ShieldCheck /><div><h3>你的书，留在你的设备上</h3><p>{native ? '书籍解析全部在本地完成，不上传服务器。正文保存在 App 私有文件夹，设置和进度存入系统持久存储。App 不提供跨设备同步；是否进入系统备份由你的 iPhone 备份设置决定。' : '书籍解析全部在本地完成，不上传服务器。书架与阅读进度保存在当前浏览器，不跨设备同步。'}</p></div></div>

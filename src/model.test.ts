@@ -35,16 +35,22 @@ describe('阅读设置与进度', () => {
     expect(validateSettings({ ...defaultSettings, speed: 1600 }).speed).toBe(1600);
     expect(validateSettings({ ...defaultSettings, speed: -1 }).speed).toBe(30);
     expect(validateSettings({ ...defaultSettings, fontSize: 0, maxLines: 999, cursorThickness: 9, cursorColor: 'url(x)' }))
-      .toMatchObject({ fontSize: 12, maxLines: 15, cursorThickness: 6, cursorColor: defaultSettings.cursorColor });
+      .toMatchObject({ fontSize: 12, maxLines: 30, cursorThickness: 6, cursorColor: defaultSettings.cursorColor });
     for (const [input, output] of [[0, 1], [1, 1], [6, 6], [7, 6], [2.6, 3], [NaN, 2], [Infinity, 2]]) {
       expect(validateSettings({ cursorThickness: input }).cursorThickness).toBe(output);
     }
     const migrated = validateSettings({ version: 2, cursorScale: 2, speed: 600, cursorWords: 50, cursorColor: '#e5b77b', cursorTransparent: true });
     expect(migrated).toMatchObject({ cursorThickness: 2, speed: 600, cursorWords: 50, cursorColor: '#e5b77b', cursorTransparent: true });
     expect(migrated).not.toHaveProperty('cursorScale');
-    expect(validateSettings({ fontSize: 12, maxLines: 15 })).toMatchObject({ fontSize: 12, maxLines: 15 });
+    for (const maxLines of [15, 30]) expect(validateSettings({ fontSize: 12, maxLines })).toMatchObject({ fontSize: 12, maxLines });
     expect(validateSettings({ cursorTransparent: true }).cursorTransparent).toBe(true);
     for (const value of ['true', 1, null, undefined]) expect(validateSettings({ cursorTransparent: value }).cursorTransparent).toBe(false);
+  });
+  it('停留行限制2–30，旧配置默认为第2行且不改阅读设置', () => {
+    expect(validateSettings({ version: 2, speed: 600, maxLines: 15 })).toMatchObject({ speed: 600, maxLines: 15, cursorRow: 2 });
+    for (const [input, expected] of [[-1, 2], [1, 2], [2, 2], [4.6, 5], [30, 30], [99, 30], [NaN, 2], [Infinity, 2]]) {
+      expect(validateSettings({ cursorRow: input }).cursorRow).toBe(expected);
+    }
   });
   it('默认指读模式，留痕模式可保存，旧配置和非法模式安全回退', () => {
     expect(defaultSettings.cursorMode).toBe('pointer');
@@ -340,6 +346,50 @@ describe('按实际行数分页', () => {
     expect(rowAtSource(doc, layout, doc.offsets[layout.rows[2].start])).toBe(2);
     expect(rowAtSource(doc, layout, doc.length)).toBe(5);
     expect(buildMotion(doc, layout, 50).total).toBe(4);
+  });
+});
+
+describe('阅读区铺满与停留行', () => {
+  it('各字号、行数和横竖屏都铺满可用高度，最多支持30行', () => {
+    for (const [width, height] of [[390, 620], [844, 236], [1440, 1060]]) {
+      for (const fontSize of [12, 28, 64]) {
+        for (const maxLines of [2, 6, 15, 30]) {
+          const m = readingMetrics(width, height, { ...defaultSettings, fontSize, maxLines });
+          expect(m.visibleLines).toBeLessThanOrEqual(maxLines);
+          expect(m.visibleLines * m.lineHeight).toBeCloseTo(height, 5);
+          expect(m.underlineOffset + 6).toBeLessThan(m.lineHeight);
+          expect(m.fontSize).toBeGreaterThanOrEqual(12);
+        }
+      }
+    }
+    expect(readingMetrics(1440, 1060, { ...defaultSettings, fontSize: 12, maxLines: 30 }).visibleLines).toBe(30);
+  });
+  it('停留行不足时临时限制到最后可见行，恢复空间后仍保留原偏好', () => {
+    const settings = { ...defaultSettings, fontSize: 12, maxLines: 30, cursorRow: 18 };
+    const tall = readingMetrics(1440, 1060, settings);
+    const short = readingMetrics(844, 230, settings);
+    expect(tall.cursorRow).toBe(18);
+    expect(short.cursorRow).toBe(short.visibleLines);
+    expect(readingMetrics(1440, 1060, settings).cursorRow).toBe(18);
+    expect(settings.cursorRow).toBe(18);
+    expect(readingMetrics(390, 620, { ...settings, maxLines: 6 }).cursorRow).toBe(6);
+  });
+  it('只变停留行不改变排版、页数、时钟与留痕范围，两模式同样生效', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛'.repeat(60)]);
+    for (const cursorMode of ['pointer', 'trail'] as const) {
+      const settings = { ...defaultSettings, cursorMode, maxLines: 30, fontSize: 12 };
+      const initial = readingMetrics(1440, 1060, settings);
+      const layout = layoutDocument(doc, initial.columns, 'plain');
+      const frame = motionFrame(buildMotion(doc, layout, 5), 130.25);
+      for (const cursorRow of [2, 8, 18, 30]) {
+        const m = readingMetrics(1440, 1060, { ...settings, cursorRow });
+        expect({ ...m, cursorRow: initial.cursorRow }).toEqual(initial);
+        const changed = layoutDocument(doc, m.columns, 'plain');
+        expect(changed).toEqual(layout);
+        expect(motionFrame(buildMotion(doc, changed, 5), 130.25)).toEqual(frame);
+        expect(trailRange(changed, frame.rowIndex, frame)).toEqual(trailRange(layout, frame.rowIndex, frame));
+      }
+    }
   });
 });
 

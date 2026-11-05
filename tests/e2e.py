@@ -88,7 +88,11 @@ def assert_reader_layout(page):
     assert controls['y'] + controls['height'] < viewport['height'], (controls, viewport)
     visible = int(page.locator('.reading-band').get_attribute('data-visible-lines'))
     maximum = int(page.locator('.reading-band').get_attribute('data-max-lines'))
-    assert 2 <= visible <= maximum <= 15
+    assert 2 <= visible <= maximum <= 30
+    requested = int(page.locator('.reading-band').get_attribute('data-requested-cursor-row'))
+    actual = int(page.locator('.reading-band').get_attribute('data-cursor-row'))
+    assert actual == min(requested, visible)
+    assert 2 <= actual <= visible
     assert page.locator('.reading-row').count() <= visible + 5
     assert page.locator('.reader-controls button').count() == 3
     navigation = boxes['page-navigation']
@@ -112,7 +116,12 @@ def assert_reader_layout(page):
         const bottom=[...document.querySelector('.page-navigation').children].filter(e=>!e.classList.contains('sr-only')).map(center);
         const workspace=document.querySelector('.reading-workspace').getBoundingClientRect();
         const band=document.querySelector('.reading-band').getBoundingClientRect();
-        return header.getBoundingClientRect().height<=48 && top.length===3 && Math.max(...top.map(p=>p.y))-Math.min(...top.map(p=>p.y))<1
+        const controlBox=document.querySelector('.reader-controls').getBoundingClientRect();
+        const topGap=band.top-header.getBoundingClientRect().bottom, bottomGap=controlBox.top-band.bottom;
+        const data=document.querySelector('.reading-band').dataset;
+        return Math.abs(topGap-bottomGap)<1 && bottomGap>=0 && bottomGap<=4.1
+            && Math.abs(band.height-workspace.height)<1 && Math.abs(Number(data.lineHeight)*Number(data.visibleLines)-band.height)<1
+            && header.getBoundingClientRect().height<=48 && top.length===3 && Math.max(...top.map(p=>p.y))-Math.min(...top.map(p=>p.y))<1
             && Math.abs(buttons[1].x-innerWidth/2)<1 && Math.abs((buttons[0].x+buttons[2].x)/2-buttons[1].x)<1
             && Math.max(...buttons.map(p=>p.y))-Math.min(...buttons.map(p=>p.y))<1
             && Math.max(...bottom.map(p=>p.y))-Math.min(...bottom.map(p=>p.y))<1
@@ -614,6 +623,108 @@ def assert_trail_modes(page, engine):
     print(f'PASS {engine}: pointer/trail, no return flight, retained per-row ink, rewind/restart/reflow/reload, colors/transparency, bounded buffers', flush=True)
 
 
+def sample_anchor(page, duration=0):
+    return page.evaluate('''duration=>new Promise(resolve=>{
+        const samples=[]; let start;
+        const tick=time=>{
+            start??=time;
+            const band=document.querySelector('.reading-band'), d=band.dataset;
+            const grid=document.querySelector('.reading-grid').getBoundingClientRect();
+            const row=document.querySelector('.reading-row[data-row="'+d.row+'"]');
+            const line=d.cursorMode==='trail'?row.querySelector('.reading-trail'):document.querySelector('.scan-cursor');
+            const rect=line.getBoundingClientRect(), glyph=document.querySelector('.is-current > span').getBoundingClientRect();
+            const expected=(Number(d.cursorRow)-1+Number(d.row)-Number(d.scroll)/Number(d.lineHeight))*Number(d.lineHeight)+Number(d.underlineOffset);
+            const rowRects=[...document.querySelectorAll('.reading-row')].map(e=>e.getBoundingClientRect());
+            samples.push({row:Number(d.row),top:rect.top-grid.top,expected,bottom:rect.bottom-grid.top,
+                height:grid.height,visible:Number(d.visibleLines),count:rowRects.length,hidden:line.hidden,
+                below:line.hidden||rect.top>=glyph.bottom+1,
+                filled:Math.min(...rowRects.map(r=>r.top))<=grid.top+1&&Math.max(...rowRects.map(r=>r.bottom))>=grid.bottom-1});
+            if(time-start>=duration)resolve(samples);else requestAnimationFrame(tick);
+        };requestAnimationFrame(tick);
+    })''', duration)
+
+
+def assert_anchor_and_spacing(page, engine):
+    page.set_viewport_size({'width': 1440, 'height': 1140})
+    upload(page, '停留行测试.txt', ('甲乙丙丁戊己庚辛壬癸' * 2000).encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《停留行测试》', exact=True).click()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='恢复默认').click()
+    expect(page.locator('#cursor-row')).to_have_value('2')
+    expect(page.locator('#cursor-row')).to_have_attribute('max', '30')
+    expect(page.locator('#max-lines')).to_have_attribute('max', '30')
+    page.get_by_role('button', name='无标点密排', exact=True).click()
+    page.locator('#font-size').fill('12')
+    page.locator('#max-lines').fill('30')
+    page.locator('#reading-speed').fill('600')
+    page.get_by_role('button', name='完成设置').click()
+    band=page.locator('.reading-band')
+    expect(band).to_have_attribute('data-visible-lines', '30')
+    page.get_by_label('跳转页码').fill('3')
+    page.get_by_role('button', name='跳转', exact=True).click()
+    original = band.get_attribute('data-source')
+    pages = band.get_attribute('data-pages')
+    for mode in ['指读', '划线留痕']:
+        for row in [2, 8, 18, 30]:
+            page.get_by_role('button', name='阅读设置', exact=True).click()
+            page.get_by_role('button', name=mode, exact=True).click()
+            page.locator('#cursor-row').fill(str(row))
+            page.get_by_role('button', name='完成设置').click()
+            expect(band).to_have_attribute('data-source', original)
+            expect(band).to_have_attribute('data-pages', pages)
+            expect(band).to_have_attribute('data-cursor-row', str(row))
+            assert_reader_layout(page)
+            sample = sample_anchor(page)[0]
+            if not sample['hidden']:
+                assert abs(sample['top'] - sample['expected']) < 0.05, sample
+                assert 0 <= sample['top'] and sample['bottom'] <= sample['height'] + 0.1, sample
+            assert sample['count'] <= 35 and sample['filled'], sample
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.locator('#cursor-row').fill('18')
+    page.get_by_role('button', name='完成设置').click()
+    page.get_by_role('button', name='返回书架').click()
+    page.reload()
+    page.get_by_role('button', name='继续阅读', exact=True).click()
+    expect(band).to_have_attribute('data-source', original)
+    expect(band).to_have_attribute('data-requested-cursor-row', '18')
+    for width,height in [(390,844),(844,390),(320,568),(1440,1140)]:
+        page.set_viewport_size({'width':width,'height':height})
+        page.wait_for_timeout(250)
+        assert_reader_layout(page)
+        expect(band).to_have_attribute('data-source', original)
+        expect(band).to_have_attribute('data-requested-cursor-row', '18')
+        sample=sample_anchor(page)[0]
+        assert sample['filled'] and sample['count'] <= sample['visible']+5
+        page.screenshot(path=str(ARTIFACTS / f'{engine}-anchor-{width}.png'))
+    expect(band).to_have_attribute('data-cursor-row', '18')
+    page.set_viewport_size({'width':390,'height':844})
+    page.wait_for_timeout(250)
+    for mode in ['指读', '划线留痕']:
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        page.get_by_role('button', name=mode, exact=True).click()
+        page.locator('#max-lines').fill('6')
+        page.get_by_role('button', name='完成设置').click()
+        expect(band).to_have_attribute('data-requested-cursor-row', '18')
+        expect(band).to_have_attribute('data-cursor-row', '6')
+        page.get_by_role('button', name='开始', exact=True).click()
+        frames=sample_anchor(page, int(band.get_attribute('data-columns'))*250)
+        page.get_by_role('button', name='停止', exact=True).click()
+        assert frames[-1]['row'] > frames[0]['row']
+        for sample in frames:
+            assert sample['filled'] and sample['count'] <= sample['visible']+5, sample
+            if not sample['hidden']:
+                assert abs(sample['top']-sample['expected'])<0.05, sample
+                assert 0<=sample['top'] and sample['bottom']<=sample['height']+0.1 and sample['below'], sample
+        page.screenshot(path=str(ARTIFACTS / f'{engine}-anchor-playing-{mode}.png'))
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='恢复默认').click()
+    expect(page.locator('#cursor-row')).to_have_value('2')
+    page.get_by_role('button', name='完成设置').click()
+    page.get_by_role('button', name='返回书架').click()
+    print(f'PASS {engine}: balanced spacing/full-height area, 30 lines, selectable underline rows, bounded history, reflow/resume and both modes',flush=True)
+
+
 def main():
     with sync_playwright() as p:
         for engine in [p.chromium, p.webkit]:
@@ -692,6 +803,7 @@ def main():
                 assert_guided_reading(page, engine.name)
                 assert_pagination(page, engine.name)
                 assert_trail_modes(page, engine.name)
+                assert_anchor_and_spacing(page, engine.name)
                 assert not errors, errors
             except Exception:
                 page.screenshot(path=str(ARTIFACTS / f'{engine.name}-failure.png'))

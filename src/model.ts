@@ -32,6 +32,7 @@ export type Settings = {
   cursorThickness: number;
   cursorWords: number;
   cursorMode: 'pointer' | 'trail';
+  cursorRow: number;
 };
 
 export const fonts = {
@@ -42,14 +43,15 @@ export const fonts = {
 
 export const MAX_READING_SPEED = 1600;
 export const MIN_FONT_SIZE = 12;
-export const MAX_VISIBLE_LINES = 15;
+export const MAX_VISIBLE_LINES = 30;
+export const MIN_CURSOR_ROW = 2;
 export const MAX_CURSOR_WORDS = 50;
 export const MAX_CURSOR_THICKNESS = 6;
 
 export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
   lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
-  maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer',
+  maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer', cursorRow: 2,
 };
 
 export const themes = [
@@ -79,6 +81,7 @@ export function validateSettings(value: unknown): Settings {
     cursorThickness: Math.round(number(v.cursorThickness, 1, MAX_CURSOR_THICKNESS, defaultSettings.cursorThickness)),
     cursorWords: Math.round(number(v.cursorWords, 1, MAX_CURSOR_WORDS, defaultSettings.cursorWords)),
     cursorMode: v.cursorMode === 'trail' ? 'trail' : 'pointer',
+    cursorRow: Math.round(number(v.cursorRow, MIN_CURSOR_ROW, MAX_VISIBLE_LINES, defaultSettings.cursorRow)),
   };
 }
 
