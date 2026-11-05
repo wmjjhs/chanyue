@@ -93,7 +93,8 @@
 - 留痕由当前源阅读进度重建：暂停保留，重启续读恢复；字号、排版和方向变化后按新位置绘制。切回指读隐藏留痕，后退或跳页按新进度重建，重新阅读从零开始，不使用历史最大进度。原文不修改，也不把留痕另存为永久批注；每个缓冲行仅一个线条节点，长书不会累积整本DOM。
 - 留痕层次可配置：当前线、刚读完线、最淡不透明度（0–100%，依次不增）、渐淡跨度（1–30行）、过渡时长（0–1秒），附层次预览及恢复默认。默认100%／65%／25%、5行、0.4秒；从上一行向前经过指定跨度达到最淡。仅作用于划线留痕，关闭渐淡恢复同深，透明开关优先；过渡跟随阅读时钟，暂停冻结，续读重建，不改变字速。
 - 离线环境音提供柔雨、微风、流水，单选不混音。默认关闭，音量默认20%，独立调节0–100%；开始阅读手势后才播放，音量变化与启停使用约350毫秒过渡。阅读暂停时默认继续，可关闭此选项；设置、翻页与读完暂停遵循同一偏好。返回书架停止，锁屏或进入后台立即停止，回前台不会自动出声，不提供后台播放器。
-- 三种环境音由 `scripts/generate-ambience.mjs` 确定性合成，是原创自然风格循环音，非实地录音。每种24秒，三种WAV合计约3.2 MB，构建时生成并内置，PWA加入预缓存。错误或系统音频中断会显示提示，不阻断阅读；请配合系统音量低音量使用，百分比不代表安全响度。真实听感、循环接缝、锁屏及与其他音频共存仍需在iPhone上验收。
+- 环境音为已试听确认的真实录音：雨B「轻柔雨幕」— [soundrecorder7 / 167034](https://freesound.org/people/soundrecorder7/sounds/167034/)，风A「风过树叶」— [o_ciz / 475448](https://freesound.org/people/o_ciz/sounds/475448/)，溪A「苏格兰浅溪」— [BurghRecords / 446019](https://freesound.org/people/BurghRecords/sounds/446019/)，原站均标注 [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)。使用与试听同源、哈希核验的公开高质量MP3预览，非原始无损录音；解码后保持双声道（雨B左右相同，不人工扩宽），只做恒定增益、去直流及2秒平滑等功率首尾交叠，不加音乐。正式循环为24／58／58秒，44.1kHz、16bit PCM WAV，总计约24.7 MB。
+- `assets/ambience/` 保存处理后的gzip无损压缩资产及 `sources.json` 来源、授权、选音、参数和哈希清单；`scripts/generate-ambience.mjs` 常规构建仅使用Node内置模块解压核验，无需联网、Python或FFmpeg。重新处理需 `numpy`、`imageio-ffmpeg`，运行 `python scripts/prepare-recorded-ambience.py --source-directory <含manifest.json与original-previews的已核验试听目录>`。PWA缓存单文件上限11 MB、运行时读取上限11 MB，时长上限仍60秒。错误或中断不阻断阅读；请配合系统音量低音量使用，百分比不代表安全响度。最终循环听感及真机表现仍需iPhone验收。
 - 手机横竖屏布局自动切换。需关闭 iPhone 的竖排方向锁定；App 不会强行锁定方向。动态文字仍可能引发不适，建议先用120–300字/分钟，出现不适立即暂停，不能保证消除头晕。
 - 书架支持批量导入、搜索、排序、阅读状态筛选、重命名和确认删除。
 - 网页版使用 IndexedDB 与 localStorage；独立 iOS 版使用私有文件夹与 Preferences。内容仅以纯文本渲染。
@@ -114,12 +115,13 @@
 ## 验证
 
 - `npm test`：覆盖段落保留、Unicode字素、三种排版、标点不计时、1–50字窗口、透明配置、按实际行数分页与指定页跳转、直接换行无飞行、正文滚动连续性、两模式及留痕进度重建、下划线间距及粗细校验、30行上限、停留行迁移/屏幕适配、满高行距、旧倍率迁移、源锚点、编码、设置迁移、导入限制和原生存储适配器（插件模拟，并非真机）。
+- `python -m unittest discover -s tests -p test_ambience_assets.py -v`：核对雨B／风A／溪A来源和CC0、压缩及PCM内容哈希、44.1kHz双声道、24／58／58秒长度、峰值/能量/接缝数值、原始声道差异、Node纯离线重复解压及篡改拒绝。不代表接缝主观听感已验收。
 - `python -m unittest discover -s tests -p test_ios_packaging.py -v`：7 项云打包脚本测试，覆盖真机目标、未签名参数、Xcode 选择、失败退出码、IPA 文件结构及执行权限；不代表已完成 Xcode 编译。
 - `python scripts/build_unsigned_ios.py --check-only`：Windows 可执行的源码完整性与共享 scheme 检查。真正的归档需在 GitHub macOS 构建机运行。
 - `npm run build`：严格 TypeScript 检查和网页生产构建。
 - `npm run build:ios` / `npm run ios:check`：构建/检查原生离线资源；`npm run ios:sync` 同步到 Xcode 工程。上述命令不是 iOS 二进制编译。
 - `python tests/native_offline.py`：先执行 `npm run build:ios`。不启动服务器，用包内文件拦截资源请求，在全新上下文验证 TXT/DOCX/中文 PDF 首次导入、12px/30行/50字窗口、18行停留偏好及屏幕适配、下划线颜色与6px粗细、留痕模式及线条重启恢复、无标点模式及源锚点续读。Chromium 使用 `offline=True`；Windows WebKit 因离线导航拦截内核错误，改用只提供包内资源并阻断其他请求。此测试不验证原生文件选择器、签名或真实 WKWebView 桥接。
-- `python tests/comfort.py http://127.0.0.1:4173`：沿用上述网页构建和预览服务，支持Web Audio的内核使用真实AudioContext验证三音种解码、24秒循环、按音频时钟等待的最终音量、暂停偏好、静音进入、模拟pagehide及书架清理；本机Windows Playwright WebKit未提供AudioContext，明确跳过实播并验证错误提示、阅读不受阻及三份WAV可访问；逐帧验证渐淡公式、暂停/重载一致、参数约束、透明优先和指读不变。Chromium另测PWA断网重载后的三音种播放。原生包内离线测试也运行音频与渐淡回归并验证非默认参数恢复；单测覆盖异步切换竞态、失败重试、超时及系统中断。模拟事件与浏览器音频验证不代表真机锁屏或实际听感通过。
+- `python tests/comfort.py http://127.0.0.1:4173`：沿用上述网页构建和预览服务，支持Web Audio的内核使用真实AudioContext验证选定三音种的24／58／58秒长度、双声道及各声道RMS、跨越实际58秒循环边界、按音频时钟等待的最终音量、暂停偏好、静音进入、模拟pagehide及书架清理；本机Windows Playwright WebKit未提供AudioContext，明确跳过实播并验证错误提示、阅读不受阻及三份WAV可访问；逐帧验证渐淡公式、暂停/重载一致、参数约束、透明优先和指读不变。Chromium另测PWA断网重载后的三音种播放。原生包内离线测试也运行音频与渐淡回归并验证非默认参数恢复；单测覆盖异步切换竞态、失败重试、超时及系统中断。模拟事件与浏览器音频验证不代表真机锁屏或实际听感通过。
 - iOS环境音兼容回归：仅对iOS原生 `capacitor:` 同源包内音频接受状态码0的可读响应，仍校验WAV头、长度及解码结果；网页状态0、404/500、不透明响应、重定向、异常路径与损坏数据仍拒绝。单测模拟这一原生响应差异，不能代替真机确认；Chromium另验证资源/格式/解码错误码、故障时继续阅读及重试后60%音量播放。设置显示E01–E08阶段化错误，不再仅提示反复重试。已知行为参考 [Capacitor #7794](https://github.com/ionic-team/capacitor/issues/7794)。
 - `npm audit --omit=dev`：生产依赖安全检查。
 - 浏览器测试：安装依赖 `python -m pip install playwright` 和浏览器 `python -m playwright install chromium webkit`，先执行 `npm run build`，启动 `npm run preview -- --host 127.0.0.1 --port 4173`，再执行 `python tests/e2e.py http://127.0.0.1:4173`。覆盖真实格式导入、行内连续指读/换行直接定位、留痕增长/保留/回退/重读/重排恢复、节点复用、纯文字计时、1/5/10/50字窗口、12px/15/30行、停留行2/8/18/30及临时适配、上下对称间距与阅读区满高、1/3/6px下划线及透明与恢复配色、始终无缩放、顶部单行与底部居中两行、三种排版、页数及页码跳转、非法页码、纯标点页、行缓冲上限、暂停/续读/重读、书籍管理、安全渲染、离线 PDF、窄屏预览和横竖屏。截图及运动采样输出到 `artifacts`；坐标连续性通过不代表 iPhone 真机帧率和舒适度通过。

@@ -137,13 +137,14 @@ export function SettingsPanel({ settings, onChange, onClose }: {
       <h3>阅读环境音</h3>
       <label className="transparent-setting"><input id="ambient-enabled" type="checkbox" checked={settings.ambientEnabled} onChange={e => set('ambientEnabled', e.target.checked)} />开启自然环境音</label>
       <div className="layout-options" role="group" aria-label="环境音类型">
-        {(['rain', 'wind', 'stream'] as const).map(sound => <button key={sound} aria-label={ambientNames[sound]} aria-pressed={settings.ambientSound === sound} onClick={() => set('ambientSound', sound)}>{ambientNames[sound]}<small>{sound === 'rain' ? '均匀雨幕，无雷声' : sound === 'wind' ? '轻柔风声，无风啸' : '缓缓流水，无人声'}</small></button>)}
+        {(['rain', 'wind', 'stream'] as const).map(sound => <button key={sound} aria-label={ambientNames[sound]} aria-pressed={settings.ambientSound === sound} onClick={() => set('ambientSound', sound)}>{ambientNames[sound]}<small>{sound === 'rain' ? '轻柔雨幕 · 实录' : sound === 'wind' ? '风过树叶 · 实录' : '苏格兰浅溪 · 实录'}</small></button>)}
       </div>
       <label className="range-label" htmlFor="ambient-volume">环境音量<output>{settings.ambientVolume}%</output></label>
       <input id="ambient-volume" type="range" min="0" max="100" step="1" value={settings.ambientVolume} onChange={e => set('ambientVolume', Number(e.target.value))} />
       <label className="transparent-setting"><input id="ambient-continue" type="checkbox" checked={settings.ambientContinuePaused} onChange={e => set('ambientContinuePaused', e.target.checked)} />阅读暂停时继续播放</label>
       <p className="ambient-status field-note" role="status" data-audio-state={audioState}>{settings.ambientEnabled ? audioMessages[audioState] : '环境音已关闭'}</p>
-      <p className="field-note">原创合成的自然风格循环音，随应用离线提供，非实地录音。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>
+      <p className="field-note">已选真实自然录音，随应用离线提供并平滑循环。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>
+      <details className="field-note"><summary>录音来源与授权</summary><p>柔雨：soundrecorder7（Freesound 167034）；微风：o_ciz（475448）；流水：BurghRecords（446019）。均为 CC0 1.0。使用作者公开高质量预览，非原始无损录音；保持原双声道，雨声左右相同，未人工扩宽。来源及处理记录随项目保存。</p></details>
     </section>
     <footer className="modal-footer"><button className="text-button" onClick={() => onChange({ ...defaultSettings })}><RotateCcw size={15} />恢复默认</button><button className="primary-button" onClick={onClose}>完成设置 <Check size={16} /></button></footer>
   </Modal>;

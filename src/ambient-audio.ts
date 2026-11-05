@@ -148,7 +148,7 @@ export class AmbientAudio {
       const response = await audioStep('resource', () => fetch(files[kind], { signal: request.signal, credentials: 'same-origin', redirect: 'error' }));
       if (!response.ok && !isBundledResponse(response, files[kind])) throw new AudioFailure('response', response.status);
       const bytes = await audioStep('resource', () => response.arrayBuffer());
-      if (bytes.byteLength > 2_000_000 || bytes.byteLength < 44) throw new AudioFailure('data');
+      if (bytes.byteLength > 11_000_000 || bytes.byteLength < 44) throw new AudioFailure('data');
       const header = new DataView(bytes);
       if (header.getUint32(0) !== 0x52494646 || header.getUint32(8) !== 0x57415645 || header.getUint32(4, true) + 8 !== bytes.byteLength) throw new AudioFailure('data');
       const buffer = await audioStep('decode', () => context.decodeAudioData(bytes));

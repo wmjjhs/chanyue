@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, expect
 from e2e import upload, close_import, assert_reader_layout, position
 
 ARTIFACTS = Path(__file__).resolve().parents[1] / 'artifacts'
+AMBIENCE = {item['kind']: item for item in json.loads((ARTIFACTS.parent / 'assets/ambience/sources.json').read_text(encoding='utf-8'))['items']}
 PROBE = '''(() => {
     const Native = window.AudioContext;
     window.__audioContexts = [];
@@ -79,7 +80,7 @@ def assert_ambience(page, engine, loop_check=False):
                 const r=await fetch('/ambience/'+sound+'.wav'),b=new Uint8Array(await r.arrayBuffer());
                 return {ok:r.ok,size:b.length,header:String.fromCharCode(...b.slice(0,4))};
             }''', sound)
-            assert data == {'ok': True, 'size': 1058444, 'header': 'RIFF'}, data
+            assert data == {'ok': True, 'size': AMBIENCE[sound]['wavBytes'], 'header': 'RIFF'}, data
         print(f'SKIP {engine}: real audio unavailable (no AudioContext); PASS error fallback keeps reading, all three WAV resources accessible', flush=True)
         return False
     wait_audio(page, True)
@@ -92,16 +93,19 @@ def assert_ambience(page, engine, loop_check=False):
         wait_audio(page, True)
         data = page.evaluate('''()=>{
             const c=window.__audioContexts.at(-1), s=c.probeSources.filter(s=>s.started&&!s.ended).at(-1).source;
-            const a=s.buffer.getChannelData(0);let energy=0;for(let i=0;i<a.length;i++)energy+=a[i]*a[i];
-            return {duration:s.buffer.duration,loop:s.loop,rms:Math.sqrt(energy/a.length),gain:c.probeGains.at(-1).gain.value};
+            const rms=Array.from({length:s.buffer.numberOfChannels},(_,channel)=>{
+                const a=s.buffer.getChannelData(channel);let energy=0;for(let i=0;i<a.length;i++)energy+=a[i]*a[i];return Math.sqrt(energy/a.length);
+            });
+            return {duration:s.buffer.duration,loop:s.loop,channels:s.buffer.numberOfChannels,rms,gain:c.probeGains.at(-1).gain.value};
         }''')
-        assert data['duration'] == 24 and data['loop'] and 0.05 < data['rms'] < 0.2, data
+        assert abs(data['duration'] - AMBIENCE[sound]['duration']) < 0.01 and data['loop'] and data['channels'] == 2, data
+        assert all(abs(actual - expected) < 0.002 for actual, expected in zip(data['rms'], AMBIENCE[sound]['rms'])), (sound, data)
         assert abs(data['gain'] - 0.2) < 0.01, (engine, sound, data)
         page.get_by_role('button', name='完成设置').click()
     if loop_check:
         start = page.evaluate('window.__audioContexts.at(-1).currentTime')
         sources = page.evaluate('window.__audioContexts.at(-1).probeSources.length')
-        page.wait_for_function('start=>window.__audioContexts.at(-1).currentTime-start>=24.1', arg=start, timeout=35000)
+        page.wait_for_function('args=>window.__audioContexts.at(-1).currentTime-args.start>=args.duration+0.1', arg={'start': start, 'duration': data['duration']}, timeout=int((data['duration'] + 15) * 1000))
         assert page.evaluate('window.__audioContexts.at(-1).probeSources.length') == sources
         wait_audio(page, True)
     page.get_by_role('button', name='阅读设置', exact=True).click()

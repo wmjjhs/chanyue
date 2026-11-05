@@ -35,7 +35,7 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,mjs,css,html,svg,png,bcmap,pfb,ttf,wasm,wav}'],
-        maximumFileSizeToCacheInBytes: 6000000,
+        maximumFileSizeToCacheInBytes: 11000000,
         navigateFallbackDenylist: [/^\/pdf-assets\//, /^\/ambience\//],
       },
     }),

@@ -1,53 +1,35 @@
 // 版权所有：波哥
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
+import assert from 'node:assert/strict';
 
-export function synthesizeAmbience(kind, rate = 22050, seconds = 24) {
-  if (!['rain', 'wind', 'stream'].includes(kind)) throw new Error('Unknown ambience');
-  const length = Math.round(rate * seconds);
-  const overlap = Math.min(Math.round(rate * 2), Math.floor(length / 4));
-  const raw = new Float32Array(length + overlap);
-  let seed = { rain: 7531, wind: 3817, stream: 9421 }[kind];
-  let low = 0, mid = 0, slow = 0, bubble = 0, phase = 0;
-  const noise = () => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) / 2147483648 - 1; };
-  for (let i = 0; i < raw.length; i++) {
-    const t = i / rate, white = noise();
-    low += 0.025 * (white - low);
-    mid += 0.28 * (white - mid);
-    slow += 0.0005 * (white - slow);
-    if (kind === 'rain') {
-      raw[i] = (mid * 0.65 + (white - low) * 0.18) * (0.86 + 0.07 * Math.sin(t * 0.7) + slow * 0.3);
-    } else if (kind === 'wind') {
-      raw[i] = low * (1.5 + 0.35 * Math.sin(t * 0.53) + 0.2 * Math.sin(t * 0.91)) + mid * 0.035;
-    } else {
-      bubble += (white * white - 1 / 3 - bubble) * 0.006;
-      phase += 2 * Math.PI * (430 + 90 * Math.sin(t * 1.23) + 180 * slow) / rate;
-      raw[i] = mid * 0.28 + low * 1.3 + Math.sin(phase) * bubble * 0.22;
-    }
-  }
-  const samples = new Float32Array(length);
-  let mean = 0;
-  for (let i = 0; i < length; i++) {
-    const weight = i < length - overlap ? 0 : (1 - Math.cos(Math.PI * (i - (length - overlap)) / overlap)) / 2;
-    samples[i] = raw[i + overlap] * (1 - weight) + (weight ? raw[i - (length - overlap)] * weight : 0);
-    mean += samples[i] / length;
-  }
-  let peak = 0, energy = 0;
-  for (let i = 0; i < length; i++) { samples[i] -= mean; peak = Math.max(peak, Math.abs(samples[i])); energy += samples[i] ** 2; }
-  const scale = Math.min(0.6 / peak, 0.13 / Math.sqrt(energy / length));
-  for (let i = 0; i < length; i++) samples[i] *= scale;
-  return samples;
+const directory = new URL('../assets/ambience/', import.meta.url);
+const manifest = JSON.parse(readFileSync(new URL('sources.json', directory), 'utf8'));
+const choices = { rain: ['rain-b', '167034', 24], wind: ['wind-a', '475448', 58], stream: ['stream-a', '446019', 58] };
+const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+
+export function verifyAmbience(wav, kind) {
+  assert(Object.hasOwn(choices, kind), '未知环境音');
+  const [selection, soundId, duration] = choices[kind];
+  const item = manifest.items.find(value => value.kind === kind);
+  assert(item?.selection === selection && item.source.endsWith(`/sounds/${soundId}/`), `选音不匹配：${kind}`);
+  assert(item.licenseUrl === 'https://creativecommons.org/publicdomain/zero/1.0/', `授权不匹配：${kind}`);
+  assert(wav.length === 44 + duration * 44100 * 4 && wav.length === item.wavBytes, `环境音长度不匹配：${kind}`);
+  assert(wav.toString('ascii', 0, 4) === 'RIFF' && wav.toString('ascii', 8, 16) === 'WAVEfmt ' && wav.toString('ascii', 36, 40) === 'data', `环境音格式无效：${kind}`);
+  assert(wav.readUInt32LE(4) === wav.length - 8 && wav.readUInt32LE(40) === wav.length - 44, `环境音不完整：${kind}`);
+  assert(wav.readUInt32LE(16) === 16 && wav.readUInt16LE(20) === 1 && wav.readUInt16LE(22) === 2 && wav.readUInt32LE(24) === 44100 && wav.readUInt32LE(28) === 176400 && wav.readUInt16LE(32) === 4 && wav.readUInt16LE(34) === 16, `环境音采样参数无效：${kind}`);
+  assert(digest(wav) === item.wavSha256, `环境音内容与已选录音不匹配：${kind}`);
 }
 
-export function writeAmbience(directory) {
-  mkdirSync(directory, { recursive: true });
-  for (const kind of ['rain', 'wind', 'stream']) {
-    const samples = synthesizeAmbience(kind);
-    const wav = Buffer.alloc(44 + samples.length * 2);
-    wav.write('RIFF', 0); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8);
-    wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22);
-    wav.writeUInt32LE(22050, 24); wav.writeUInt32LE(44100, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34);
-    wav.write('data', 36); wav.writeUInt32LE(samples.length * 2, 40);
-    for (let i = 0; i < samples.length; i++) wav.writeInt16LE(Math.round(samples[i] * 32767), 44 + i * 2);
-    writeFileSync(new URL(`${kind}.wav`, directory), wav);
+export function writeAmbience(destination) {
+  mkdirSync(destination, { recursive: true });
+  for (const kind of Object.keys(choices)) {
+    const item = manifest.items.find(value => value.kind === kind);
+    const archive = readFileSync(new URL(`${kind}.wav.gz`, directory));
+    assert(digest(archive) === item?.archiveSha256, `环境音压缩文件损坏：${kind}`);
+    const wav = gunzipSync(archive, { maxOutputLength: 11_000_000 });
+    verifyAmbience(wav, kind);
+    writeFileSync(new URL(`${kind}.wav`, destination), wav);
   }
 }

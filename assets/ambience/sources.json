@@ -1,0 +1,111 @@
+{ "_copyright": "版权所有：波哥；仅适用于处理程序，原录音为各作者CC0贡献",
+  "format": "PCM WAV / gzip",
+  "note": "用户确认雨B、风A、溪A；源为作者公开高质量MP3预览，并非原始无损录音。保持原双声道（雨B左右相同），恒定增益、去直流、2秒同音源等功率平滑交叠；PCM与gzip不再有损压缩。常规构建仅解压本地资产，无需联网或Python。",
+  "items": [
+    {
+      "kind": "rain",
+      "selection": "rain-b",
+      "title": "轻柔雨幕",
+      "author": "soundrecorder7",
+      "originalTitle": "Light Rain",
+      "source": "https://freesound.org/people/soundrecorder7/sounds/167034/",
+      "previewUrl": "https://cdn.freesound.org/previews/167/167034_2328971-hq.mp3",
+      "license": "CC0 1.0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceSha256": "e96de7229dd13c42798e8bdad265123d4e1d1377135c9c54c829fe4c7cd3ed55",
+      "sourceStartSeconds": 0,
+      "sourceLengthSeconds": 26,
+      "overlapSeconds": 2,
+      "gainDb": 18.14,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitsPerSample": 16,
+      "frames": 1058400,
+      "duration": 24.0,
+      "wavBytes": 4233644,
+      "wavSha256": "d26bbce1721fc2807a9bd48448c7e34f6041a773bf1c4f320b8fee80472b9484",
+      "archiveSha256": "9c5275a707d8f4c18389fc9e7a9c852e1480634df72619dfe52cbef7c8b97cd5",
+      "rms": [
+        0.03376732132423853,
+        0.03376732132423853
+      ],
+      "peak": 0.587799072265625,
+      "seamDelta": [
+        302,
+        302
+      ],
+      "minimumSecondRms": 0.02820470343080277,
+      "channelDifferenceRms": 0.0
+    },
+    {
+      "kind": "wind",
+      "selection": "wind-a",
+      "title": "风过树叶",
+      "author": "o_ciz",
+      "originalTitle": "WIND(LEAVES).WAV",
+      "source": "https://freesound.org/people/o_ciz/sounds/475448/",
+      "previewUrl": "https://cdn.freesound.org/previews/475/475448_7009965-hq.mp3",
+      "license": "CC0 1.0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceSha256": "32334db89c207004f5f290ec94d775670ffa846f3f63e33da3065bed5346def8",
+      "sourceStartSeconds": 5,
+      "sourceLengthSeconds": 60,
+      "overlapSeconds": 2,
+      "gainDb": 26.3,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitsPerSample": 16,
+      "frames": 2557800,
+      "duration": 58.0,
+      "wavBytes": 10231244,
+      "wavSha256": "57a618666ae6c8d21fc172b4ed0ca4d1faaaf4c81fb7c22d0c4eb8f5fdc74d9c",
+      "archiveSha256": "80805da7164c4bc582f31a27be1f97b0dfce6a21c65a1c805e3a060107dd5afb",
+      "rms": [
+        0.0478097733804898,
+        0.0480672718530565
+      ],
+      "peak": 0.335906982421875,
+      "seamDelta": [
+        88,
+        119
+      ],
+      "minimumSecondRms": 0.032811957982639396,
+      "channelDifferenceRms": 0.003593680338419825
+    },
+    {
+      "kind": "stream",
+      "selection": "stream-a",
+      "title": "苏格兰浅溪",
+      "author": "BurghRecords",
+      "originalTitle": "Gentle Stream Natural Stream Sound",
+      "source": "https://freesound.org/people/BurghRecords/sounds/446019/",
+      "previewUrl": "https://cdn.freesound.org/previews/446/446019_7241289-hq.mp3",
+      "license": "CC0 1.0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "sourceSha256": "59a18db8c6fafbd3f3cec5c46bf5f878f5e55de76167a242119afcc4ac0f854e",
+      "sourceStartSeconds": 1,
+      "sourceLengthSeconds": 60,
+      "overlapSeconds": 2,
+      "gainDb": 3.07,
+      "sampleRate": 44100,
+      "channels": 2,
+      "bitsPerSample": 16,
+      "frames": 2557800,
+      "duration": 58.0,
+      "wavBytes": 10231244,
+      "wavSha256": "e9cc5be8c3f17f88da6cf3f471de7b8036e2f79254df90ad7fc3f292cff91db6",
+      "archiveSha256": "aeacfd68c18c856336497cac7a7875eb6276f549be2207482ca92b933a7dc608",
+      "rms": [
+        0.03208975815439729,
+        0.032821450861545386
+      ],
+      "peak": 0.39263916015625,
+      "seamDelta": [
+        132,
+        125
+      ],
+      "minimumSecondRms": 0.026229948804431535,
+      "channelDifferenceRms": 0.02517339487545597
+    }
+  ]
+}

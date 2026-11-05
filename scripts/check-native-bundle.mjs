@@ -2,6 +2,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
+import { verifyAmbience } from './generate-ambience.mjs';
 
 const root = fileURLToPath(new URL('../dist-native/', import.meta.url));
 const html = readFileSync(`${root}/index.html`, 'utf8');
@@ -13,8 +14,7 @@ for (const folder of ['cmaps', 'standard_fonts', 'wasm']) {
 }
 for (const kind of ['rain', 'wind', 'stream']) {
   const wav = readFileSync(`${root}/ambience/${kind}.wav`);
-  assert(wav.toString('ascii', 0, 4) === 'RIFF' && wav.toString('ascii', 8, 12) === 'WAVE', `无效环境音：${kind}`);
-  assert(wav.length === 44 + 24 * 22050 * 2, `环境音时长不正确：${kind}`);
+  verifyAmbience(wav, kind);
 }
 const assets = readdirSync(`${root}/assets`);
 assert(assets.some(file => /^pdf\.worker.*\.mjs$/.test(file)), '缺少 PDF 工作线程');

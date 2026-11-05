@@ -57,6 +57,7 @@ jobs:
         run: |
           npm test
           python3 -m unittest discover -s tests -p test_ios_packaging.py -v
+          python3 -m unittest discover -s tests -p test_ambience_assets.py -v
 
       - name: 构建并同步完全离线资源
         run: npm run ios:sync

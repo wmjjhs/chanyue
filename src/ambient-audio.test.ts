@@ -29,15 +29,15 @@ class FakeContext {
   }
 }
 const enabled = { ...defaultSettings, ambientEnabled: true };
-const wavBytes = () => {
-  const bytes = new ArrayBuffer(100), view = new DataView(bytes);
+const wavBytes = (size = 100) => {
+  const bytes = new ArrayBuffer(size), view = new DataView(bytes);
   new Uint8Array(bytes).set(new TextEncoder().encode('RIFF'));
   new Uint8Array(bytes).set(new TextEncoder().encode('WAVEfmt '), 8);
-  view.setUint32(4, 92, true); view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
-  view.setUint32(24, 22050, true); view.setUint32(28, 44100, true);
-  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
-  new Uint8Array(bytes).set(new TextEncoder().encode('data'), 36); view.setUint32(40, 56, true);
+  view.setUint32(4, size - 8, true); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 2, true);
+  view.setUint32(24, 44100, true); view.setUint32(28, 176400, true);
+  view.setUint16(32, 4, true); view.setUint16(34, 16, true);
+  new Uint8Array(bytes).set(new TextEncoder().encode('data'), 36); view.setUint32(40, size - 44, true);
   return bytes;
 };
 const response = () => ({ ok: true, status: 200, type: 'basic', redirected: false, url: '', arrayBuffer: async () => wavBytes() });
@@ -92,13 +92,35 @@ describe('阅读环境音生命周期', () => {
     expect(audio.getError()).toBe(`E03 音频响应异常（状态${status}）`);
     expect(FakeContext.all[0].decodeAudioData).not.toHaveBeenCalled();
   });
-  it.each([0, 43, 100, 2_000_001])('状态0返回空白或损坏的%d字节数据仍拒绝解码', async length => {
+  it.each([0, 43, 100, 11_000_001])('状态0返回空白或损坏的%d字节数据仍拒绝解码', async length => {
     vi.mocked(Capacitor.getPlatform).mockReturnValue('ios');
     vi.stubGlobal('location', new URL('capacitor://localhost/'));
     vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status: 0, arrayBuffer: async () => new ArrayBuffer(length) })));
     audio.start(enabled); await flush();
     expect(audio.getError()).toBe('E04 音频数据不完整');
     expect(FakeContext.all[0].decodeAudioData).not.toHaveBeenCalled();
+  });
+  it.each([4_233_644, 10_231_244, 11_000_000])('iOS状态0下%d字节合法双声道WAV可播放', async size => {
+    vi.mocked(Capacitor.getPlatform).mockReturnValue('ios');
+    vi.stubGlobal('location', new URL('capacitor://localhost/'));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status: 0, arrayBuffer: async () => wavBytes(size) })));
+    audio.start(enabled);
+    FakeContext.all[0].decodeAudioData.mockResolvedValueOnce({ duration: 58 });
+    await flush();
+    expect(audio.getSnapshot()).toBe('playing');
+  });
+  it('即使WAV头和长度正确，超过11MB仍拒绝解码', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), arrayBuffer: async () => wavBytes(11_000_004) })));
+    audio.start(enabled); await flush();
+    expect(audio.getError()).toBe('E04 音频数据不完整');
+    expect(FakeContext.all[0].decodeAudioData).not.toHaveBeenCalled();
+  });
+  it.each([0, 0.99, 60.01, NaN, Infinity])('非法解码时长%s仍拒绝播放', async duration => {
+    audio.start(enabled);
+    FakeContext.all[0].decodeAudioData.mockResolvedValueOnce({ duration });
+    await flush();
+    expect(audio.getError()).toBe('E04 音频数据不完整');
+    expect(FakeContext.all[0].sources).toHaveLength(0);
   });
   it('默认关闭/音量零都不创建音频', () => {
     audio.start(defaultSettings); audio.start({ ...enabled, ambientVolume: 0 });
