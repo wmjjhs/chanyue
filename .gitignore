@@ -3,6 +3,7 @@ node_modules/
 dist/
 dist-native/
 public/pdf-assets/
+public/ambience/
 artifacts/
 *.local
 __pycache__/

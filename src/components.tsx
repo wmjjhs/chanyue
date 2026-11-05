@@ -1,7 +1,9 @@
 // 版权所有：波哥
-import { useEffect, useId, useRef, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { ambientAudio, ambientNames } from './ambient-audio';
+import { trailOpacity } from './trail-fade';
 import { BookOpen, X, RotateCcw, Check, Smartphone, ShieldCheck, MoveHorizontal, Download, HardDrive } from 'lucide-react';
-import { defaultSettings, fonts, MAX_READING_SPEED, MAX_CURSOR_WORDS, MAX_CURSOR_THICKNESS, MAX_VISIBLE_LINES, MIN_FONT_SIZE, MIN_CURSOR_ROW, themes, type Book, type Settings } from './model';
+import { defaultSettings, validateSettings, fonts, MAX_READING_SPEED, MAX_CURSOR_WORDS, MAX_CURSOR_THICKNESS, MAX_VISIBLE_LINES, MIN_FONT_SIZE, MIN_CURSOR_ROW, themes, type Book, type Settings } from './model';
 import { Capacitor } from '@capacitor/core';
 
 export function Brand({ compact = false }: { compact?: boolean }) {
@@ -46,7 +48,9 @@ export function BookCover({ book, small = false }: { book: Book; small?: boolean
 export function SettingsPanel({ settings, onChange, onClose }: {
   settings: Settings; onChange: (settings: Settings) => void; onClose: () => void;
 }) {
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange({ ...settings, [key]: value });
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange(validateSettings({ ...settings, [key]: value }));
+  const audioState = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getSnapshot);
+  const audioMessages = { idle: '开始阅读后按偏好播放', loading: '正在准备本地环境音…', playing: '环境音播放中', paused: '环境音已暂停或静音', interrupted: '声音被系统中断，请重新点击开始阅读', error: '暂时无法播放声音，请重新点击开始阅读；不影响阅读' };
   const previewWords = settings.cursorMode === 'trail' ? 10 : Math.min(settings.cursorWords, 10);
   return <Modal title="找到你的阅读节奏" eyebrow="READING PREFERENCES / 阅读设置" onClose={onClose} className="settings-modal">
     <div className="settings-preview" style={{ background: settings.pageColor }}>
@@ -106,6 +110,39 @@ export function SettingsPanel({ settings, onChange, onClose }: {
       <input id="reading-speed" type="range" min="30" max={MAX_READING_SPEED} step="10" value={settings.speed} onChange={e => set('speed', Number(e.target.value))} />
       <div className="range-ends"><span>30 · 慢读</span><span>{MAX_READING_SPEED} · 快读</span></div>
       <p className="field-note">总时长只按文字数计算，标点与空白不计时；经过标点不额外停顿。指读、划线与正文上移使用同一时钟，换行直接切到下一行，不另加时间。建议先用 120–300 字/分钟；不适时请暂停。</p>
+    </section>
+    <section className="settings-section">
+      <h3>留痕层次</h3>
+      <label className="transparent-setting"><input id="trail-fade" type="checkbox" checked={settings.trailFade} disabled={settings.cursorMode !== 'trail'} onChange={e => set('trailFade', e.target.checked)} />留痕渐淡</label>
+      <p className="field-note">仅作用于划线留痕。当前线清晰，前文逐渐变淡；透明开关优先隐藏全部线条。</p>
+      <div className="trail-fade-preview" aria-label="留痕层次预览" style={{ background: settings.lineColor, color: settings.textColor }}>
+        {[settings.trailFadeLines + 1, Math.ceil(settings.trailFadeLines / 2) + 1, 1, 0].map((age, index) => <div key={index}><span>{index === 3 ? '当前行' : index === 2 ? '刚读完' : index === 0 ? '更早前文' : '较近前文'}</span><i data-age={age} style={{ height: settings.cursorThickness, background: settings.cursorColor, opacity: trailOpacity(settings, age) }} /></div>)}
+      </div>
+      <fieldset className="fade-controls" disabled={!settings.trailFade || settings.cursorMode !== 'trail'}>
+        <legend className="sr-only">留痕渐淡参数</legend>
+        {([['trailCurrent', '当前线不透明度', 100], ['trailRecent', '刚读完线不透明度', settings.trailCurrent], ['trailMinimum', '最淡不透明度', settings.trailRecent]] as const).map(([key, label, max]) => <div key={key}>
+          <label className="range-label" htmlFor={key}>{label}<output>{settings[key]}%</output></label>
+          <input id={key} type="range" min="0" max={max} step="1" value={settings[key]} onChange={e => set(key, Number(e.target.value))} />
+        </div>)}
+        <label className="range-label" htmlFor="trail-fade-lines">渐淡跨度<output>{settings.trailFadeLines} <small>行</small></output></label>
+        <input id="trail-fade-lines" type="range" min="1" max="30" step="1" value={settings.trailFadeLines} onChange={e => set('trailFadeLines', Number(e.target.value))} />
+        <label className="range-label" htmlFor="trail-fade-duration">过渡时长<output>{settings.trailFadeDuration.toFixed(1)} <small>秒</small></output></label>
+        <input id="trail-fade-duration" type="range" min="0" max="1" step="0.1" value={settings.trailFadeDuration} onChange={e => set('trailFadeDuration', Number(e.target.value))} />
+      </fieldset>
+      <p className="field-note">从刚读完的上一行起，向前经过设定行数达到最淡。越早的线不会更深；最淡设0%可隐藏远处线条。过渡跟随阅读时间，暂停时不再变化；不改变阅读速度。</p>
+      <button className="text-button" onClick={() => onChange({ ...settings, trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4 })}>恢复留痕默认</button>
+    </section>
+    <section className="settings-section">
+      <h3>阅读环境音</h3>
+      <label className="transparent-setting"><input id="ambient-enabled" type="checkbox" checked={settings.ambientEnabled} onChange={e => set('ambientEnabled', e.target.checked)} />开启自然环境音</label>
+      <div className="layout-options" role="group" aria-label="环境音类型">
+        {(['rain', 'wind', 'stream'] as const).map(sound => <button key={sound} aria-label={ambientNames[sound]} aria-pressed={settings.ambientSound === sound} onClick={() => set('ambientSound', sound)}>{ambientNames[sound]}<small>{sound === 'rain' ? '均匀雨幕，无雷声' : sound === 'wind' ? '轻柔风声，无风啸' : '缓缓流水，无人声'}</small></button>)}
+      </div>
+      <label className="range-label" htmlFor="ambient-volume">环境音量<output>{settings.ambientVolume}%</output></label>
+      <input id="ambient-volume" type="range" min="0" max="100" step="1" value={settings.ambientVolume} onChange={e => set('ambientVolume', Number(e.target.value))} />
+      <label className="transparent-setting"><input id="ambient-continue" type="checkbox" checked={settings.ambientContinuePaused} onChange={e => set('ambientContinuePaused', e.target.checked)} />阅读暂停时继续播放</label>
+      <p className="ambient-status field-note" role="status" data-audio-state={audioState}>{settings.ambientEnabled ? audioMessages[audioState] : '环境音已关闭'}</p>
+      <p className="field-note">原创合成的自然风格循环音，随应用离线提供，非实地录音。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>
     </section>
     <footer className="modal-footer"><button className="text-button" onClick={() => onChange({ ...defaultSettings })}><RotateCcw size={15} />恢复默认</button><button className="primary-button" onClick={onClose}>完成设置 <Check size={16} /></button></footer>
   </Modal>;

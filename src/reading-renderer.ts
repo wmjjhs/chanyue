@@ -2,6 +2,7 @@
 import type { Settings } from './model';
 import { type ReadingDocument, type ReadingLayout, type readingMetrics } from './reading-layout';
 import { trailRange, type motionFrame } from './reading-motion';
+import { trailOpacity } from './trail-fade';
 
 type Cell = { element: HTMLSpanElement; glyph: number; column: number };
 type RowView = { element: HTMLDivElement; cells: Cell[]; trail: HTMLElement };
@@ -75,6 +76,7 @@ export class ReadingRenderer {
         const range = trailRange(this.layout, rowIndex, frame);
         row.trail.style.left = `${range.x * m.cellWidth}px`;
         row.trail.style.width = `${range.width * m.cellWidth}px`;
+        row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, frame.rowElapsed * 60 / this.settings.speed));
         row.trail.hidden = !this.document.words.length || range.width <= 0;
       }
       for (const cell of row.cells) {

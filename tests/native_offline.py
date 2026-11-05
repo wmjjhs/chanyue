@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 from playwright.sync_api import sync_playwright, expect
 from e2e import docx_bytes, pdf_bytes, assert_reader_layout
+from comfort import install_audio_probe, assert_ambience, assert_fade, active_count
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / 'dist-native'
@@ -37,6 +38,7 @@ def main():
                 route.fulfill(body=target.read_bytes(), content_type=mime or mimetypes.guess_type(str(target))[0] or 'application/octet-stream')
 
             context.route('**/*', bundled_resource)
+            install_audio_probe(context)
             page = context.new_page()
             page.on('pageerror', lambda error: errors.append(str(error)))
             page.goto(ORIGIN)
@@ -45,7 +47,7 @@ def main():
             if engine.name == 'chromium':
                 assert page.evaluate('navigator.onLine') is False
             for name, data in [
-                ('离线文本.txt', '离线第一行。\n离线第二行。'.encode()),
+                ('离线文本.txt', ('甲乙丙丁戊己庚辛壬癸' * 3000).encode()),
                 ('离线文档.docx', docx_bytes()),
                 ('离线中文.pdf', pdf_bytes('完全离线，文字仍然流动。', chinese=True)),
             ]:
@@ -54,6 +56,13 @@ def main():
                 expect(page.locator('.import-results li')).to_have_class('success', timeout=40000)
                 page.get_by_role('button', name='回书架，开始阅读').click()
             expect(page.locator('.book-card')).to_have_count(6)
+            page.get_by_role('button', name='阅读《离线文本》', exact=True).click()
+            assert_ambience(page, engine.name + ' bundled offline')
+            assert_fade(page, engine.name + '-native')
+            page.get_by_role('button', name='阅读设置', exact=True).click()
+            page.get_by_role('button', name='恢复默认', exact=True).click()
+            page.get_by_role('button', name='完成设置').click()
+            page.get_by_role('button', name='返回书架').click()
             page.get_by_role('button', name='阅读《离线中文》', exact=True).click()
             expect(page.locator('.flowing-text')).to_contain_text('完全离线')
             assert_reader_layout(page)
@@ -66,6 +75,11 @@ def main():
             page.get_by_label('下划线颜色', exact=True).fill('#e5b77b')
             page.locator('#cursor-thickness').fill('6')
             page.get_by_role('button', name='划线留痕', exact=True).click()
+            for key, value in [('trailCurrent', '80'), ('trailRecent', '45'), ('trailMinimum', '0'), ('trail-fade-lines', '7'), ('trail-fade-duration', '0.7'), ('ambient-volume', '0')]:
+                page.locator('#' + key).fill(value)
+            page.locator('#ambient-enabled').check()
+            page.locator('#ambient-continue').uncheck()
+            page.get_by_role('button', name='微风', exact=True).click()
             page.get_by_role('button', name='完成设置').click()
             page.get_by_role('button', name='开始', exact=True).click()
             page.wait_for_timeout(250)
@@ -93,6 +107,14 @@ def main():
             assert page.locator('.reading-trail').evaluate_all('(nodes)=>nodes.map(e=>e.style.width)') == trail_widths
             expect(page.locator('.is-current > span')).to_have_css('transform', 'none')
             expect(page.locator('.reading-glyph[data-word="-1"]')).to_have_count(0)
+            assert active_count(page) == 0
+            page.get_by_role('button', name='阅读设置', exact=True).click()
+            for key, value in [('trailCurrent', '80'), ('trailRecent', '45'), ('trailMinimum', '0'), ('trail-fade-lines', '7'), ('trail-fade-duration', '0.7'), ('ambient-volume', '0')]:
+                expect(page.locator('#' + key)).to_have_value(value)
+            expect(page.locator('#ambient-enabled')).to_be_checked()
+            expect(page.locator('#ambient-continue')).not_to_be_checked()
+            expect(page.get_by_role('button', name='微风', exact=True)).to_have_attribute('aria-pressed', 'true')
+            assert all(f'ambience/{sound}.wav' in requested for sound in ['rain', 'wind', 'stream']), requested
             assert not errors, errors
             assert not external, external
             assert not missing, missing

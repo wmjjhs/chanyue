@@ -62,8 +62,11 @@ describe('原生持久化适配器（模拟插件）', () => {
   it('原生设置保持12px、30行、停留行、50字窗口与双模式', async () => {
     const settings = { ...defaultSettings, speed: 1600, pageColor: '#123456', fontSize: 12, maxLines: 30, cursorRow: 18, cursorWords: 50, cursorTransparent: true, cursorThickness: 6, cursorColor: '#e5b77b', layoutMode: 'plain' as const };
     for (const cursorMode of ['pointer', 'trail'] as const) {
-      await saveNativeSettings({ ...settings, cursorMode });
-      expect(await loadNativeSettings()).toEqual({ ...settings, cursorMode });
+      for (const ambientSound of ['rain', 'wind', 'stream'] as const) {
+        const comfort = { ...settings, cursorMode, ambientSound, ambientEnabled: true, ambientVolume: 0, ambientContinuePaused: false, trailCurrent: 80, trailRecent: 50, trailMinimum: 0, trailFadeLines: 10, trailFadeDuration: 0.8 };
+        await saveNativeSettings(comfort);
+        expect(await loadNativeSettings()).toEqual(comfort);
+      }
     }
   });
   it('磁盘写失败会报告错误，后续队列仍可使用', async () => {

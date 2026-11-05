@@ -353,6 +353,13 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .layout-options button[aria-pressed="true"] { background: #edf2e3; border-color: #8a9f74; color: #4a603e; }
 .layout-options small { display: block; color: #909b84; font-size: 9px; margin-top: 7px; }
 .cursor-mode-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.fade-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
+.fade-controls:disabled { opacity: .55; }
+.trail-fade-preview { padding: 14px 18px; border-radius: 9px; margin: 12px 0 16px; }
+.trail-fade-preview > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 14px; min-height: 26px; font-size: 11px; }
+.trail-fade-preview i { display: block; border-radius: 999px; }
+.ambient-status { min-height: 20px; }
+.ambient-status[data-audio-state="error"], .ambient-status[data-audio-state="interrupted"] { color: #97663a; }
 .settings-section input[type="range"]:disabled { opacity: .4; }
 .cursor-setting { display: flex; align-items: center; justify-content: space-between; margin: 17px 0; font-size: 12px; }
 .cursor-setting input { width: 40px; height: 32px; }

@@ -2,7 +2,10 @@
 import { cpSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { writeAmbience } from './generate-ambience.mjs';
+
 const root = new URL('../', import.meta.url);
+writeAmbience(new URL('public/ambience/', root));
 for (const folder of ['cmaps', 'standard_fonts', 'wasm']) {
   const destination = fileURLToPath(new URL(`public/pdf-assets/${folder}`, root));
   mkdirSync(destination, { recursive: true });

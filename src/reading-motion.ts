@@ -65,14 +65,14 @@ export function buildMotion(document: ReadingDocument, layout: ReadingLayout, re
 export function motionFrame(motion: ReadingMotion, clock: number) {
   const index = Math.min(motion.rows.length - 1, floorIndex(motion.starts, clock));
   const row = motion.rows[index];
-  if (!row) return { rowIndex: 0, x: 0, y: 0, width: 1, inkX: 0, scroll: 0, span: 0, progress: 0, completed: false };
+  if (!row) return { rowIndex: 0, x: 0, y: 0, width: 1, inkX: 0, scroll: 0, span: 0, progress: 0, completed: false, rowElapsed: 0 };
   const phase = clamp((clock - row.start) / (row.end - row.start));
   const offset = phase * Math.max(0, row.end - row.start - row.span);
   const left = curveAt(row.left, offset);
   const right = curveAt(row.right, offset);
   return { rowIndex: row.rowIndex, x: left, y: row.rowIndex, width: right - left,
     inkX: curveAt(row.ink, clock - row.start), scroll: curveAt(motion.scroll, clock), span: row.span,
-    progress: clamp(clock / Math.max(1, motion.total)), completed: clock >= motion.total };
+    progress: clamp(clock / Math.max(1, motion.total)), completed: clock >= motion.total, rowElapsed: Math.max(0, clock - row.start) };
 }
 
 export function trailRange(layout: ReadingLayout, rowIndex: number, frame: ReturnType<typeof motionFrame>) {

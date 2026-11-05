@@ -7,6 +7,7 @@ import { fonts, readableInk, type Book, type Settings } from './model';
 import { createDocument, floorIndex, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
 import { buildMotion, motionFrame } from './reading-motion';
 import { ReadingRenderer } from './reading-renderer';
+import { ambientAudio } from './ambient-audio';
 
 export type ReadingPosition = Pick<Book, 'line' | 'offset' | 'character' | 'completed'>;
 type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: () => void; onProgress: (position: ReadingPosition) => void; blocked: boolean };
@@ -33,13 +34,18 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const metrics = useMemo(() => readingMetrics(bounds.width, bounds.height, settings), [bounds, settings]);
   const layout = useMemo(() => layoutDocument(documentModel, metrics.columns, settings.layoutMode), [documentModel, metrics.columns, settings.layoutMode]);
   const motion = useMemo(() => buildMotion(documentModel, layout, settings.cursorWords), [documentModel, layout, settings.cursorWords]);
-  const latest = useRef({ onProgress, documentModel, layout, metrics, motion });
-  latest.current = { onProgress, documentModel, layout, metrics, motion };
+  const latest = useRef({ onProgress, documentModel, layout, metrics, motion, settings });
+  latest.current = { onProgress, documentModel, layout, metrics, motion, settings };
   const hasWords = documentModel.words.length > 0;
   const completed = hasWords && position.current >= documentModel.words.length && manualSource.current === null;
   const pageCount = pagination(layout.rows.length, metrics.visibleLines, 0).total;
 
-  const setRunning = useCallback((value: boolean) => { playingRef.current = value; setPlaying(value); }, []);
+  const setRunning = useCallback((value: boolean) => {
+    playingRef.current = value; setPlaying(value);
+    ambientAudio.configure(latest.current.settings, value);
+  }, []);
+  useEffect(() => { ambientAudio.configure(settings, playingRef.current); }, [settings]);
+  useEffect(() => () => { ambientAudio.stopSession(); }, []);
   const persist = useCallback(() => {
     const { documentModel: doc, onProgress: save } = latest.current;
     if (!doc.glyphs.length) return;
@@ -126,13 +132,14 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const pause = useCallback(() => { setRunning(false); persist(); }, [persist, setRunning]);
   useEffect(() => { if (blocked) pause(); }, [blocked, pause]);
   useEffect(() => {
-    const hide = () => { if (document.hidden) pause(); };
+    const leave = () => { ambientAudio.stopSession(true); pause(); };
+    const hide = () => { if (document.hidden) leave(); };
     document.addEventListener('visibilitychange', hide);
-    window.addEventListener('pagehide', pause);
-    const listener = Capacitor.isNativePlatform() ? NativeApp.addListener('appStateChange', ({ isActive }) => { if (!isActive) pause(); }).catch(() => null) : null;
+    window.addEventListener('pagehide', leave);
+    const listener = Capacitor.isNativePlatform() ? NativeApp.addListener('appStateChange', ({ isActive }) => { if (!isActive) leave(); }).catch(() => null) : null;
     return () => {
       document.removeEventListener('visibilitychange', hide);
-      window.removeEventListener('pagehide', pause);
+      window.removeEventListener('pagehide', leave);
       void listener?.then(handle => handle?.remove());
     };
   }, [pause]);
@@ -145,6 +152,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (playingRef.current) { pause(); return; }
     if (position.current >= latest.current.documentModel.words.length && manualSource.current === null) seek(0);
     manualSource.current = null;
+    ambientAudio.start(latest.current.settings);
     setRunning(true);
   }, [pause, seek, setRunning]);
   const goToPage = useCallback((page: number) => {

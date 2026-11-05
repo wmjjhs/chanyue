@@ -11,6 +11,11 @@ assert(!existsSync(`${root}/sw.js`), '原生包不应依赖 Service Worker');
 for (const folder of ['cmaps', 'standard_fonts', 'wasm']) {
   assert(readdirSync(`${root}/pdf-assets/${folder}`).length > 0, `缺少 PDF 离线资源：${folder}`);
 }
+for (const kind of ['rain', 'wind', 'stream']) {
+  const wav = readFileSync(`${root}/ambience/${kind}.wav`);
+  assert(wav.toString('ascii', 0, 4) === 'RIFF' && wav.toString('ascii', 8, 12) === 'WAVE', `无效环境音：${kind}`);
+  assert(wav.length === 44 + 24 * 22050 * 2, `环境音时长不正确：${kind}`);
+}
 const assets = readdirSync(`${root}/assets`);
 assert(assets.some(file => /^pdf\.worker.*\.mjs$/.test(file)), '缺少 PDF 工作线程');
 assert(assets.some(file => /^pdf-.*\.js$/.test(file)), '缺少 PDF 解析器');

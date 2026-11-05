@@ -33,6 +33,16 @@ export type Settings = {
   cursorWords: number;
   cursorMode: 'pointer' | 'trail';
   cursorRow: number;
+  trailFade: boolean;
+  trailCurrent: number;
+  trailRecent: number;
+  trailMinimum: number;
+  trailFadeLines: number;
+  trailFadeDuration: number;
+  ambientEnabled: boolean;
+  ambientSound: 'rain' | 'wind' | 'stream';
+  ambientVolume: number;
+  ambientContinuePaused: boolean;
 };
 
 export const fonts = {
@@ -52,6 +62,8 @@ export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
   lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
   maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer', cursorRow: 2,
+  trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4,
+  ambientEnabled: false, ambientSound: 'rain', ambientVolume: 20, ambientContinuePaused: true,
 };
 
 export const themes = [
@@ -66,6 +78,9 @@ export function validateSettings(value: unknown): Settings {
   const number = (n: unknown, min: number, max: number, fallback: number) =>
     typeof n === 'number' && Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
   const color = (c: unknown, fallback: string) => typeof c === 'string' && /^#[\da-f]{6}$/i.test(c) ? c : fallback;
+  const boolean = (v: unknown, fallback: boolean) => typeof v === 'boolean' ? v : fallback;
+  const trailCurrent = Math.round(number(v.trailCurrent, 0, 100, defaultSettings.trailCurrent));
+  const trailRecent = Math.min(trailCurrent, Math.round(number(v.trailRecent, 0, 100, defaultSettings.trailRecent)));
   return {
     version: 2,
     font: v.font && Object.hasOwn(fonts, v.font) ? v.font : defaultSettings.font,
@@ -82,6 +97,15 @@ export function validateSettings(value: unknown): Settings {
     cursorWords: Math.round(number(v.cursorWords, 1, MAX_CURSOR_WORDS, defaultSettings.cursorWords)),
     cursorMode: v.cursorMode === 'trail' ? 'trail' : 'pointer',
     cursorRow: Math.round(number(v.cursorRow, MIN_CURSOR_ROW, MAX_VISIBLE_LINES, defaultSettings.cursorRow)),
+    trailFade: boolean(v.trailFade, defaultSettings.trailFade),
+    trailCurrent, trailRecent,
+    trailMinimum: Math.min(trailRecent, Math.round(number(v.trailMinimum, 0, 100, defaultSettings.trailMinimum))),
+    trailFadeLines: Math.round(number(v.trailFadeLines, 1, 30, defaultSettings.trailFadeLines)),
+    trailFadeDuration: number(v.trailFadeDuration, 0, 1, defaultSettings.trailFadeDuration),
+    ambientEnabled: boolean(v.ambientEnabled, defaultSettings.ambientEnabled),
+    ambientSound: v.ambientSound === 'wind' || v.ambientSound === 'stream' ? v.ambientSound : 'rain',
+    ambientVolume: Math.round(number(v.ambientVolume, 0, 100, defaultSettings.ambientVolume)),
+    ambientContinuePaused: boolean(v.ambientContinuePaused, defaultSettings.ambientContinuePaused),
   };
 }
 
