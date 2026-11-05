@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AmbientAudio } from './ambient-audio';
 import { defaultSettings } from './model';
+import { Capacitor } from '@capacitor/core';
+
+vi.mock('@capacitor/core', () => ({ Capacitor: { getPlatform: vi.fn(() => 'web') } }));
 
 const makeSource = () => ({ buffer: null, loop: false, connect: vi.fn(), disconnect: vi.fn(), start: vi.fn(), stop: vi.fn(), onended: null as (() => void) | null });
 const makeGain = () => ({ gain: { value: 0, cancelAndHoldAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() }, connect: vi.fn(), disconnect: vi.fn() });
@@ -26,11 +29,24 @@ class FakeContext {
   }
 }
 const enabled = { ...defaultSettings, ambientEnabled: true };
-const response = () => ({ ok: true, arrayBuffer: async () => new ArrayBuffer(100) });
-const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+const wavBytes = () => {
+  const bytes = new ArrayBuffer(100), view = new DataView(bytes);
+  new Uint8Array(bytes).set(new TextEncoder().encode('RIFF'));
+  new Uint8Array(bytes).set(new TextEncoder().encode('WAVEfmt '), 8);
+  view.setUint32(4, 92, true); view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, 22050, true); view.setUint32(28, 44100, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+  new Uint8Array(bytes).set(new TextEncoder().encode('data'), 36); view.setUint32(40, 56, true);
+  return bytes;
+};
+const response = () => ({ ok: true, status: 200, type: 'basic', redirected: false, url: '', arrayBuffer: async () => wavBytes() });
+const flush = async () => { for (let i = 0; i < 30; i++) await Promise.resolve(); };
 let audio: AmbientAudio;
 beforeEach(() => {
   vi.useFakeTimers(); FakeContext.all = [];
+  vi.mocked(Capacitor.getPlatform).mockReturnValue('web');
+  vi.stubGlobal('location', new URL('https://reader.example/'));
   vi.stubGlobal('AudioContext', FakeContext); vi.stubGlobal('navigator', {});
   vi.stubGlobal('fetch', vi.fn(async () => response()));
   audio = new AmbientAudio();
@@ -46,6 +62,43 @@ describe('阅读环境音生命周期', () => {
     expect(fetch).toHaveBeenCalledWith('/ambience/rain.wav', expect.objectContaining({ redirect: 'error', credentials: 'same-origin' }));
     expect(context.sources[0].loop).toBe(true); expect(context.sources[0].start).toHaveBeenCalledTimes(1);
     expect(context.gains[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.2, 0.35);
+  });
+  it.each(['rain', 'wind', 'stream'] as const)('iOS包内%s音频状态0但数据有效时应正常播放，60%音量不被误判失败', async ambientSound => {
+    vi.mocked(Capacitor.getPlatform).mockReturnValue('ios');
+    vi.stubGlobal('location', new URL('capacitor://localhost/'));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status: 0, url: `capacitor://localhost/ambience/${ambientSound}.wav` })));
+    audio.start({ ...enabled, ambientSound, ambientVolume: 60 }); await flush();
+    expect(audio.getSnapshot()).toBe('playing');
+    expect(FakeContext.all[0].decodeAudioData).toHaveBeenCalledTimes(1);
+    expect(FakeContext.all[0].gains[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.6, 0.35);
+  });
+  it.each([
+    ['web', 'https://reader.example/', 0, 'basic', false, ''],
+    ['ios', 'https://reader.example/', 0, 'basic', false, ''],
+    ['ios', 'capacitor://localhost/', 404, 'basic', false, ''],
+    ['ios', 'capacitor://localhost/', 500, 'basic', false, ''],
+    ['ios', 'capacitor://localhost/', 0, 'opaque', false, ''],
+    ['ios', 'capacitor://localhost/', 0, 'opaqueredirect', false, ''],
+    ['ios', 'capacitor://localhost/', 0, 'error', false, ''],
+    ['ios', 'capacitor://localhost/', 0, 'basic', true, ''],
+    ['ios', 'capacitor://localhost/', 0, 'basic', false, 'https://other.example/rain.wav'],
+    ['ios', 'capacitor://localhost/', 0, 'basic', false, 'capacitor://localhost/other.wav'],
+  ] as const)('异常响应不可绕过校验：%s %s %s %s %s %s', async (platform, href, status, type, redirected, url) => {
+    vi.mocked(Capacitor.getPlatform).mockReturnValue(platform);
+    vi.stubGlobal('location', new URL(href));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status, type, redirected, url })));
+    audio.start(enabled); await flush();
+    expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe(`E03 音频响应异常（状态${status}）`);
+    expect(FakeContext.all[0].decodeAudioData).not.toHaveBeenCalled();
+  });
+  it.each([0, 43, 100, 2_000_001])('状态0返回空白或损坏的%d字节数据仍拒绝解码', async length => {
+    vi.mocked(Capacitor.getPlatform).mockReturnValue('ios');
+    vi.stubGlobal('location', new URL('capacitor://localhost/'));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status: 0, arrayBuffer: async () => new ArrayBuffer(length) })));
+    audio.start(enabled); await flush();
+    expect(audio.getError()).toBe('E04 音频数据不完整');
+    expect(FakeContext.all[0].decodeAudioData).not.toHaveBeenCalled();
   });
   it('默认关闭/音量零都不创建音频', () => {
     audio.start(defaultSettings); audio.start({ ...enabled, ambientVolume: 0 });
@@ -102,20 +155,40 @@ describe('阅读环境音生命周期', () => {
   it('加载失败、解码失败、播放受阻及超时可重试且不抛向阅读器', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline missing'); }));
     audio.start(enabled); await flush(); expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe('E02 本地音频读取失败');
     vi.stubGlobal('fetch', vi.fn(async () => response()));
     FakeContext.all[0].decodeAudioData.mockRejectedValueOnce(new Error('decode'));
     audio.start(enabled); await flush(); expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe('E05 音频解码失败');
     FakeContext.all[0].resume.mockRejectedValueOnce(new Error('NotAllowed'));
     audio.start(enabled); await flush(); expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe('E06 音频引擎未能启动');
     audio.start(enabled); await flush(); expect(audio.getSnapshot()).toBe('playing');
+    expect(audio.getError()).toBeNull();
     audio.stopSession(true); vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
     audio.start(enabled); await vi.advanceTimersByTimeAsync(10001); expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe('E08 音频准备超时');
   });
   it('内核不支持Web Audio时显示错误而不向阅读器抛出异常', () => {
     vi.stubGlobal('AudioContext', undefined);
     expect(() => audio.start(enabled)).not.toThrow();
     expect(audio.getSnapshot()).toBe('error');
+    expect(audio.getError()).toBe('E01 音频引擎初始化失败');
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it('iOS状态0无响应URL但WAV有效可播放，后台取消仍阻止迟到音源', async () => {
+    vi.mocked(Capacitor.getPlatform).mockReturnValue('ios');
+    vi.stubGlobal('location', new URL('capacitor://localhost/'));
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ...response(), ok: false, status: 0 })));
+    audio.start(enabled); await flush();
+    expect(audio.getSnapshot()).toBe('playing');
+    audio.stopSession(true);
+    let finish!: (value: ReturnType<typeof response>) => void;
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => { finish = resolve; })));
+    audio.start(enabled); audio.stopSession(true);
+    finish({ ...response(), ok: false, status: 0 }); await flush();
+    expect(FakeContext.all[1].sources).toHaveLength(0);
+    expect(audio.getSnapshot()).toBe('idle');
   });
   it('系统音频中断立即关闭，订阅可移除，重新手势可恢复', async () => {
     const notify = vi.fn(); const unsubscribe = audio.subscribe(notify);

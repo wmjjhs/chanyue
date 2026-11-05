@@ -50,7 +50,8 @@ export function SettingsPanel({ settings, onChange, onClose }: {
 }) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange(validateSettings({ ...settings, [key]: value }));
   const audioState = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getSnapshot);
-  const audioMessages = { idle: '开始阅读后按偏好播放', loading: '正在准备本地环境音…', playing: '环境音播放中', paused: '环境音已暂停或静音', interrupted: '声音被系统中断，请重新点击开始阅读', error: '暂时无法播放声音，请重新点击开始阅读；不影响阅读' };
+  const audioError = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getError);
+  const audioMessages = { idle: '开始阅读后按偏好播放', loading: '正在准备本地环境音…', playing: '环境音播放中', paused: '环境音已暂停或静音', interrupted: '声音被系统中断，请重新点击开始阅读', error: `暂时无法播放声音：${audioError ?? '音频异常'}。可重新点击开始阅读；若仍失败，请反馈此错误码。不影响阅读。` };
   const previewWords = settings.cursorMode === 'trail' ? 10 : Math.min(settings.cursorWords, 10);
   return <Modal title="找到你的阅读节奏" eyebrow="READING PREFERENCES / 阅读设置" onClose={onClose} className="settings-modal">
     <div className="settings-preview" style={{ background: settings.pageColor }}>

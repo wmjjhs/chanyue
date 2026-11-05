@@ -120,6 +120,7 @@
 - `npm run build:ios` / `npm run ios:check`：构建/检查原生离线资源；`npm run ios:sync` 同步到 Xcode 工程。上述命令不是 iOS 二进制编译。
 - `python tests/native_offline.py`：先执行 `npm run build:ios`。不启动服务器，用包内文件拦截资源请求，在全新上下文验证 TXT/DOCX/中文 PDF 首次导入、12px/30行/50字窗口、18行停留偏好及屏幕适配、下划线颜色与6px粗细、留痕模式及线条重启恢复、无标点模式及源锚点续读。Chromium 使用 `offline=True`；Windows WebKit 因离线导航拦截内核错误，改用只提供包内资源并阻断其他请求。此测试不验证原生文件选择器、签名或真实 WKWebView 桥接。
 - `python tests/comfort.py http://127.0.0.1:4173`：沿用上述网页构建和预览服务，支持Web Audio的内核使用真实AudioContext验证三音种解码、24秒循环、按音频时钟等待的最终音量、暂停偏好、静音进入、模拟pagehide及书架清理；本机Windows Playwright WebKit未提供AudioContext，明确跳过实播并验证错误提示、阅读不受阻及三份WAV可访问；逐帧验证渐淡公式、暂停/重载一致、参数约束、透明优先和指读不变。Chromium另测PWA断网重载后的三音种播放。原生包内离线测试也运行音频与渐淡回归并验证非默认参数恢复；单测覆盖异步切换竞态、失败重试、超时及系统中断。模拟事件与浏览器音频验证不代表真机锁屏或实际听感通过。
+- iOS环境音兼容回归：仅对iOS原生 `capacitor:` 同源包内音频接受状态码0的可读响应，仍校验WAV头、长度及解码结果；网页状态0、404/500、不透明响应、重定向、异常路径与损坏数据仍拒绝。单测模拟这一原生响应差异，不能代替真机确认；Chromium另验证资源/格式/解码错误码、故障时继续阅读及重试后60%音量播放。设置显示E01–E08阶段化错误，不再仅提示反复重试。已知行为参考 [Capacitor #7794](https://github.com/ionic-team/capacitor/issues/7794)。
 - `npm audit --omit=dev`：生产依赖安全检查。
 - 浏览器测试：安装依赖 `python -m pip install playwright` 和浏览器 `python -m playwright install chromium webkit`，先执行 `npm run build`，启动 `npm run preview -- --host 127.0.0.1 --port 4173`，再执行 `python tests/e2e.py http://127.0.0.1:4173`。覆盖真实格式导入、行内连续指读/换行直接定位、留痕增长/保留/回退/重读/重排恢复、节点复用、纯文字计时、1/5/10/50字窗口、12px/15/30行、停留行2/8/18/30及临时适配、上下对称间距与阅读区满高、1/3/6px下划线及透明与恢复配色、始终无缩放、顶部单行与底部居中两行、三种排版、页数及页码跳转、非法页码、纯标点页、行缓冲上限、暂停/续读/重读、书籍管理、安全渲染、离线 PDF、窄屏预览和横竖屏。截图及运动采样输出到 `artifacts`；坐标连续性通过不代表 iPhone 真机帧率和舒适度通过。
 

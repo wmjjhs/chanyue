@@ -229,6 +229,55 @@ def assert_fade(page, engine):
     print(f'PASS {engine}: opacity gradients/transitions, pause/reload equality, constrained sliders, zero floor, transparent override, pointer unaffected', flush=True)
 
 
+def assert_audio_errors(browser, device, url):
+    context = browser.new_context(**device, service_workers='block')
+    install_audio_probe(context)
+    mode = {'value': 'missing'}
+    errors = []
+    def audio_route(route):
+        if mode['value'] == 'missing':
+            route.fulfill(status=404, body='missing')
+        elif mode['value'] == 'invalid':
+            route.fulfill(body=b'not a WAV' * 20)
+        elif mode['value'] == 'decode':
+            bad = bytearray(100)
+            bad[:4] = b'RIFF'; bad[4:8] = (92).to_bytes(4, 'little'); bad[8:12] = b'WAVE'
+            route.fulfill(body=bytes(bad), content_type='audio/wav')
+        else:
+            route.continue_()
+    context.route('**/ambience/rain.wav', audio_route)
+    page = context.new_page()
+    page.on('pageerror', lambda error: errors.append(str(error)))
+    try:
+        page.goto(url); page.wait_for_load_state('networkidle')
+        upload(page, '音频恢复.txt', ('甲乙丙丁' * 1000).encode()); close_import(page)
+        page.get_by_role('button', name='阅读《音频恢复》', exact=True).click()
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        page.locator('#ambient-enabled').check(); page.locator('#ambient-volume').fill('60')
+        for failure, message in [('missing', 'E03 音频响应异常（状态404）'), ('invalid', 'E04 音频数据不完整'), ('decode', 'E05 音频解码失败')]:
+            mode['value'] = failure
+            page.get_by_role('button', name='完成设置').click()
+            before = position(page)
+            page.get_by_role('button', name='开始', exact=True).click()
+            page.wait_for_function('before=>Number(document.querySelector(".reading-band").dataset.position)>before', arg=before)
+            page.get_by_role('button', name='阅读设置', exact=True).click()
+            expect(page.locator('.ambient-status')).to_have_attribute('data-audio-state', 'error')
+            expect(page.locator('.ambient-status')).to_contain_text(message)
+            assert active_count(page) == 0
+        page.screenshot(path=str(ARTIFACTS / 'audio-error-detail.png'))
+        mode['value'] = 'normal'
+        page.get_by_role('button', name='完成设置').click()
+        page.get_by_role('button', name='开始', exact=True).click()
+        wait_audio(page, True); wait_audio_fade(page)
+        assert abs(page.evaluate('window.__audioContexts.at(-1).probeGains.at(-1).gain.value') - 0.6) < 0.01
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        expect(page.locator('.ambient-status')).to_have_text('环境音播放中')
+        assert not errors, errors
+        print('PASS chromium: HTTP/data/decode errors show distinct codes, reading continues, retry restores real playback at 60%', flush=True)
+    finally:
+        context.close()
+
+
 def main():
     url=sys.argv[1] if len(sys.argv)>1 else 'http://127.0.0.1:4173'
     results=[]
@@ -256,6 +305,7 @@ def main():
                     page.get_by_role('button',name='继续阅读',exact=True).click()
                     assert_ambience(page,'chromium PWA offline')
                     context.set_offline(False)
+                    assert_audio_errors(browser, p.devices['iPhone 13'], url)
                 assert not errors,errors
                 results.append({'browser': engine.name, 'fade': 'passed', 'audio': 'passed' if page.evaluate('typeof window.AudioContext==="function"') else 'skipped: no AudioContext; fallback passed'})
             except Exception:

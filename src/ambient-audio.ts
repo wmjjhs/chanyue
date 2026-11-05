@@ -1,4 +1,5 @@
 // 版权所有：波哥
+import { Capacitor } from '@capacitor/core';
 import { defaultSettings, type Settings } from './model';
 
 type Sound = Settings['ambientSound'];
@@ -7,6 +8,24 @@ export type AmbientState = 'idle' | 'loading' | 'playing' | 'paused' | 'interrup
 const files: Record<Sound, string> = { rain: '/ambience/rain.wav', wind: '/ambience/wind.wav', stream: '/ambience/stream.wav' };
 export const ambientNames: Record<Sound, string> = { rain: '柔雨', wind: '微风', stream: '流水' };
 const fadeSeconds = 0.35;
+const failureMessages = {
+  context: 'E01 音频引擎初始化失败', resource: 'E02 本地音频读取失败', response: 'E03 音频响应异常',
+  data: 'E04 音频数据不完整', decode: 'E05 音频解码失败', resume: 'E06 音频引擎未能启动',
+  playback: 'E07 音源启动失败', timeout: 'E08 音频准备超时',
+};
+type FailureCode = keyof typeof failureMessages;
+class AudioFailure extends Error {
+  constructor(readonly code: FailureCode, readonly status?: number) { super(code); }
+}
+async function audioStep<T>(code: FailureCode, action: () => Promise<T>): Promise<T> {
+  try { return await action(); } catch { throw new AudioFailure(code); }
+}
+function isBundledResponse(response: Response, file: string): boolean {
+  return Capacitor.getPlatform() === 'ios' && location.protocol === 'capacitor:'
+    && response.status === 0 && !response.redirected
+    && !['opaque', 'opaqueredirect', 'error'].includes(response.type)
+    && (!response.url || response.url === new URL(file, location.href).href);
+}
 
 export class AmbientAudio {
   private context: AudioContext | null = null;
@@ -21,14 +40,16 @@ export class AmbientAudio {
   private pending: Sound | null = null;
   private buffers = new Map<Sound, AudioBuffer>();
   private state: AmbientState = 'idle';
+  private error: string | null = null;
   private listeners = new Set<() => void>();
   private suspension: ReturnType<typeof setTimeout> | null = null;
 
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   getSnapshot = () => this.state;
-  private publish(state: AmbientState) {
-    if (this.state === state) return;
-    this.state = state;
+  getError = () => this.error;
+  private publish(state: AmbientState, error: string | null = null) {
+    if (this.state === state && this.error === error) return;
+    this.state = state; this.error = error;
     this.listeners.forEach(listener => listener());
   }
   private wanted() {
@@ -100,15 +121,17 @@ export class AmbientAudio {
         };
       }
       const context = this.context;
-      const resumed = context.resume();
+      const resumed = audioStep('resume', () => context.resume());
       this.load(resumed);
-    } catch { this.fail(); }
+    } catch (error) { this.fail(error, 'context'); }
   }
-  private fail() {
+  private fail(error: unknown, fallback: FailureCode = 'playback') {
     this.authorized = false;
     this.silence(true);
     if (this.context?.state !== 'closed') void this.context?.suspend().catch(() => {});
-    this.publish('error');
+    const failure = error instanceof AudioFailure ? error : new AudioFailure(fallback);
+    const status = failure.status !== undefined && Number.isInteger(failure.status) && failure.status >= 0 && failure.status <= 599 ? `（状态${failure.status}）` : '';
+    this.publish('error', failureMessages[failure.code] + status);
   }
   private load(resumed?: Promise<void>) {
     const context = this.context;
@@ -122,21 +145,23 @@ export class AmbientAudio {
     const loadBuffer = async () => {
       const existing = this.buffers.get(kind);
       if (existing) return existing;
-      const response = await fetch(files[kind], { signal: request.signal, credentials: 'same-origin', redirect: 'error' });
-      if (!response.ok) throw new Error('Audio unavailable');
-      const bytes = await response.arrayBuffer();
-      if (bytes.byteLength > 2_000_000 || bytes.byteLength < 44) throw new Error('Invalid audio size');
-      const buffer = await context.decodeAudioData(bytes);
-      if (buffer.duration < 1 || buffer.duration > 60) throw new Error('Invalid audio duration');
+      const response = await audioStep('resource', () => fetch(files[kind], { signal: request.signal, credentials: 'same-origin', redirect: 'error' }));
+      if (!response.ok && !isBundledResponse(response, files[kind])) throw new AudioFailure('response', response.status);
+      const bytes = await audioStep('resource', () => response.arrayBuffer());
+      if (bytes.byteLength > 2_000_000 || bytes.byteLength < 44) throw new AudioFailure('data');
+      const header = new DataView(bytes);
+      if (header.getUint32(0) !== 0x52494646 || header.getUint32(8) !== 0x57415645 || header.getUint32(4, true) + 8 !== bytes.byteLength) throw new AudioFailure('data');
+      const buffer = await audioStep('decode', () => context.decodeAudioData(bytes));
+      if (!Number.isFinite(buffer.duration) || buffer.duration < 1 || buffer.duration > 60) throw new AudioFailure('data');
       if (epoch === this.epoch) this.buffers.set(kind, buffer);
       return buffer;
     };
     const timeout = setTimeout(() => {
-      if (epoch === this.epoch) this.fail();
+      if (epoch === this.epoch) this.fail(new AudioFailure('timeout'));
     }, 10000);
-    void Promise.all([resumed ?? context.resume(), loadBuffer()]).then(([, buffer]) => {
+    void Promise.all([resumed ?? audioStep('resume', () => context.resume()), loadBuffer()]).then(([, buffer]) => {
       if (epoch !== this.epoch || context !== this.context || !this.wanted()) return;
-      if (context.state !== 'running') throw new Error('Audio not running');
+      if (context.state !== 'running') throw new AudioFailure('resume');
       for (const voice of [...this.voices]) if (voice !== this.active) this.retire(voice, true);
       const source = context.createBufferSource(), gain = context.createGain();
       source.buffer = buffer; source.loop = true; gain.gain.value = 0;
@@ -149,7 +174,7 @@ export class AmbientAudio {
       this.active = voice; this.pending = null; this.request = null;
       this.ramp(voice, this.settings.ambientVolume / 100);
       this.publish('playing');
-    }).catch(() => { if (epoch === this.epoch) this.fail(); }).finally(() => clearTimeout(timeout));
+    }).catch(error => { if (epoch === this.epoch) this.fail(error); }).finally(() => clearTimeout(timeout));
   }
   stopSession(immediate = false) {
     this.authorized = false; this.background = true; this.playing = false;
