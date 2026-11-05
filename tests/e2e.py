@@ -71,17 +71,30 @@ def position(page):
 
 
 def assert_reader_layout(page):
-    band = page.locator('.reading-band').bounding_box()
+    page.wait_for_function('''() => {
+        const band=document.querySelector('.reading-band')?.getBoundingClientRect();
+        const controls=document.querySelector('.reader-controls')?.getBoundingClientRect();
+        return band && controls && band.y >= 0 && band.bottom <= controls.y + 2;
+    }''', timeout=5000)
+    boxes = page.evaluate('''() => Object.fromEntries(['reading-band','reader-controls','page-navigation'].map(name=>{
+        const r=document.querySelector('.'+name).getBoundingClientRect();
+        return [name,{x:r.x,y:r.y,width:r.width,height:r.height}];
+    }))''')
+    band = boxes['reading-band']
     viewport = page.viewport_size
-    controls = page.locator('.reader-controls').bounding_box()
+    controls = boxes['reader-controls']
     assert band['x'] >= 0 and band['y'] >= 0 and band['x'] + band['width'] <= viewport['width'] + 1
     assert controls['y'] >= band['y'] + band['height'] - 2, (band, controls)
     assert controls['y'] + controls['height'] < viewport['height'], (controls, viewport)
     visible = int(page.locator('.reading-band').get_attribute('data-visible-lines'))
     maximum = int(page.locator('.reading-band').get_attribute('data-max-lines'))
-    assert 2 <= visible <= maximum
+    assert 2 <= visible <= maximum <= 15
     assert page.locator('.reading-row').count() <= visible + 5
     assert page.locator('.reader-controls button').count() == 3
+    navigation = boxes['page-navigation']
+    assert navigation['y'] + navigation['height'] <= viewport['height'], (navigation, viewport)
+    rows = int(page.locator('.reading-band').get_attribute('data-rows'))
+    assert int(page.locator('.reading-band').get_attribute('data-pages')) == (rows + visible - 1) // visible
     assert page.locator('.flowing-text').evaluate('(e) => new DOMMatrix(getComputedStyle(e).transform).m41') == 0
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     expect(page.locator('.reading-glyph.is-current')).to_have_count(1)
@@ -236,9 +249,9 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='恢复默认').click()
     page.get_by_role('button', name='完成设置').click()
     expect(page.get_by_role('button', name='开始', exact=True)).to_be_visible()
-    page.get_by_role('button', name='前进1行').click()
+    page.get_by_role('button', name='前进一页').click()
     after = position(page)
-    page.get_by_role('button', name='后退1行').click()
+    page.get_by_role('button', name='后退一页').click()
     assert position(page) < after
     page.get_by_role('button', name='返回书架').click()
     page.set_viewport_size({'width': 390, 'height': 844})
@@ -247,7 +260,7 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='阅读《短文》', exact=True).click()
     page.get_by_role('button', name='开始', exact=True).click()
     expect(page.get_by_role('button', name='重新阅读', exact=True)).to_be_visible(timeout=5000)
-    expect(page.get_by_role('button', name='前进1行')).to_be_disabled()
+    expect(page.get_by_role('button', name='前进一页')).to_be_disabled()
     page.get_by_role('button', name='重新阅读', exact=True).click()
     page.get_by_role('button', name='停止', exact=True).click()
     assert position(page) < 3
@@ -268,8 +281,9 @@ def assert_guided_reading(page, engine):
         else:
             assert page.locator('.reading-glyph[data-word="-1"]').count() > 0
         print(f'CHECK {engine}: punctuation timing / {mode}', flush=True)
-        elapsed = page.evaluate('''() => new Promise((resolve,reject) => {
+        timing = page.evaluate('''() => new Promise((resolve,reject) => {
             const button=document.querySelector('.play-button'), started=performance.now();
+            const samples=[];
             let animation;
             const timeout=setTimeout(()=>{
                 cancelAnimationFrame(animation);
@@ -278,13 +292,24 @@ def assert_guided_reading(page, engine):
                     band:{...document.querySelector('.reading-band').dataset}})));
             },5000);
             button.click();
-            const tick=()=>{
-                if(Number(document.querySelector('.reading-band').dataset.position)===2){clearTimeout(timeout);resolve(performance.now()-started);}
+            const tick=time=>{
+                const position=Number(document.querySelector('.reading-band').dataset.position);
+                samples.push({time,position});
+                if(position===2){clearTimeout(timeout);resolve({elapsed:performance.now()-started,samples});}
                 else animation=requestAnimationFrame(tick);
             };
             animation=requestAnimationFrame(tick);
         })''')
-        assert 450 <= elapsed <= 950, (mode, elapsed)
+        assert timing['elapsed'] >= 450, (mode, timing)
+        assert timing['samples'][-1]['position'] == 2
+        for previous, current in zip(timing['samples'], timing['samples'][1:]):
+            if previous['position'] == 0:
+                continue
+            delta = min(0.1, (current['time'] - previous['time']) / 1000)
+            assert current['position'] >= previous['position']
+            assert abs(current['position'] - min(2, previous['position'] + 4 * delta)) < 0.2, (mode, previous, current)
+        if timing['elapsed'] > 950:
+            print(f'NOTE {engine}: slow rendering ({timing["elapsed"]}ms); verified frame-clock timing, not real-device FPS', flush=True)
     page.get_by_role('button', name='返回书架').click()
     upload(page, '仅标点.txt', '……，。！？'.encode())
     close_import(page)
@@ -294,6 +319,125 @@ def assert_guided_reading(page, engine):
     expect(page.locator('.scan-cursor')).to_be_hidden()
     page.get_by_role('button', name='返回书架').click()
     print(f'PASS {engine}: continuous cursor/arc, stable DOM rows, punctuation-free timing, 1/5/10-word windows, three layouts, resume, orientation, 1600 chars/min, completion/restart')
+
+
+def assert_pagination(page, engine):
+    page.set_viewport_size({'width': 1440, 'height': 1060})
+    upload(page, '分页测试.txt', ('甲乙丙丁戊己庚辛壬癸' * 1000).encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《分页测试》', exact=True).click()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='恢复默认').click()
+    page.get_by_role('button', name='无标点密排', exact=True).click()
+    page.locator('#font-size').fill('12')
+    page.locator('#max-lines').fill('15')
+    page.locator('#cursor-words').fill('50')
+    page.locator('#cursor-scale').fill('1.5')
+    page.locator('#cursor-transparent').check()
+    expect(page.get_by_label('光标颜色', exact=True)).to_be_disabled()
+    expect(page.locator('.preview-window')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+    expect(page.locator('.settings-preview')).to_contain_text('预览仅示意10字')
+    page.get_by_role('button', name='完成设置').click()
+    band = page.locator('.reading-band')
+    assert_reader_layout(page)
+    expect(band).to_have_css('font-size', '12px')
+    expect(band).to_have_attribute('data-visible-lines', '15')
+    expect(band).to_have_attribute('data-cursor-words', '50')
+    expect(page.locator('.scan-cursor')).to_have_attribute('data-span', '50')
+    expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+    assert page.locator('.is-current > span').evaluate('(e)=>new DOMMatrix(getComputedStyle(e).transform).a') > 1.45
+    assert page.locator('.is-current > span').evaluate('(e)=>getComputedStyle(e).color') == band.evaluate('(e)=>getComputedStyle(e).color')
+    page.get_by_role('button', name='前进一页').click()
+    expect(band).to_have_attribute('data-row', '15')
+    expect(band).to_have_attribute('data-page', '2')
+    page.get_by_role('button', name='后退一页').click()
+    expect(band).to_have_attribute('data-page', '1')
+    expect(page.get_by_role('button', name='后退一页')).to_be_disabled()
+    total = int(band.get_attribute('data-pages'))
+    for invalid in ['0', '-1', '1.5', str(total + 1), '']:
+        before = position(page)
+        page.get_by_label('跳转页码').fill(invalid)
+        page.get_by_role('button', name='跳转', exact=True).click()
+        assert position(page) == before
+        assert not page.get_by_label('跳转页码').evaluate('(e)=>e.checkValidity()')
+    page.get_by_label('跳转页码').fill(str(total))
+    page.get_by_role('button', name='跳转', exact=True).click()
+    expect(band).to_have_attribute('data-page', str(total))
+    expect(band).to_have_attribute('data-row', str((total - 1) * 15))
+    expect(page.get_by_role('button', name='前进一页')).to_be_disabled()
+    page.get_by_label('跳转页码').fill('3')
+    page.get_by_label('跳转页码').press('Enter')
+    expect(band).to_have_attribute('data-row', '30')
+    page.get_by_role('button', name='开始', exact=True).click()
+    page.wait_for_timeout(250)
+    page.get_by_label('跳转页码').focus()
+    stopped = position(page)
+    page.wait_for_timeout(150)
+    assert position(page) == stopped
+    page.get_by_label('跳转页码').fill('2')
+    page.get_by_role('button', name='跳转', exact=True).click()
+    expect(page.get_by_role('button', name='开始', exact=True)).to_be_visible()
+    page.locator('.line-counter').click()
+    page.keyboard.press('ArrowRight')
+    expect(band).to_have_attribute('data-page', '3')
+    page.keyboard.press('ArrowLeft')
+    expect(band).to_have_attribute('data-page', '2')
+    saved = position(page)
+    source = float(band.get_attribute('data-source'))
+    page.get_by_role('button', name='返回书架').click()
+    page.reload()
+    page.get_by_role('button', name='继续阅读', exact=True).click()
+    assert abs(position(page) - saved) < 0.0001
+    expect(band).to_have_attribute('data-page', '2')
+    expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    expect(page.locator('#font-size')).to_have_value('12')
+    expect(page.locator('#max-lines')).to_have_value('15')
+    expect(page.locator('#cursor-words')).to_have_value('50')
+    expect(page.locator('#cursor-transparent')).to_be_checked()
+    page.locator('#cursor-transparent').uncheck()
+    expect(page.get_by_label('光标颜色', exact=True)).to_be_enabled()
+    page.get_by_role('button', name='完成设置').click()
+    expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgb(213, 226, 180)')
+    for width, height in [(390, 844), (844, 390), (320, 568)]:
+        page.set_viewport_size({'width': width, 'height': height})
+        page.wait_for_timeout(200)
+        assert_reader_layout(page)
+        assert abs(float(band.get_attribute('data-source')) - source) < 0.0001
+        rows = int(band.get_attribute('data-rows'))
+        size = int(band.get_attribute('data-visible-lines'))
+        row = int(band.get_attribute('data-row'))
+        expect(band).to_have_attribute('data-page', str(row // size + 1))
+        expect(band).to_have_attribute('data-pages', str((rows + size - 1) // size))
+        assert int(page.locator('.scan-cursor').get_attribute('data-span')) <= min(50, int(band.get_attribute('data-columns')))
+        page.screenshot(path=str(ARTIFACTS / f'{engine}-pagination-{width}.png'))
+    page.get_by_role('button', name='返回书架').click()
+    upload(page, '标点分页.txt', '甲乙\n丙丁\n！！\n？？\n戊己\n庚辛\n。。\n……'.encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《标点分页》', exact=True).click()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='语义段落', exact=True).click()
+    page.locator('#max-lines').fill('2')
+    page.get_by_role('button', name='完成设置').click()
+    expect(band).to_have_attribute('data-pages', '4')
+    for target in [2, 3, 4, 1]:
+        page.get_by_label('跳转页码').fill(str(target))
+        page.get_by_role('button', name='跳转', exact=True).click()
+        expect(band).to_have_attribute('data-page', str(target))
+        expect(band).to_have_attribute('data-row', str((target - 1) * 2))
+    page.get_by_label('跳转页码').fill('4')
+    page.get_by_role('button', name='跳转', exact=True).click()
+    page.get_by_role('button', name='返回书架').click()
+    page.reload()
+    page.get_by_role('button', name='继续阅读', exact=True).click()
+    expect(band).to_have_attribute('data-page', '4')
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='恢复默认').click()
+    expect(page.locator('#cursor-transparent')).not_to_be_checked()
+    expect(page.locator('#cursor-words')).to_have_value('1')
+    page.get_by_role('button', name='完成设置').click()
+    page.get_by_role('button', name='返回书架').click()
+    print(f'PASS {engine}: 12px/15 lines/50 words, transparent cursor with zoom, page count/jump/bounds, pause/resume, responsive repagination, punctuation-only pages', flush=True)
 
 
 def main():
@@ -310,11 +454,11 @@ def main():
             page.get_by_role('button', name='阅读《山间的一日》', exact=True).click()
             assert_reader_layout(page)
             page.screenshot(path=str(ARTIFACTS / f'{engine.name}-reader-default.png'))
-            expect(page.get_by_role('button', name='后退1行')).to_be_disabled()
-            page.get_by_role('button', name='前进1行').click()
-            expect(page.locator('.line-counter')).to_contain_text('第 2 行')
-            page.get_by_role('button', name='后退1行').click()
-            expect(page.locator('.line-counter')).to_contain_text('第 1 行')
+            expect(page.get_by_role('button', name='后退一页')).to_be_disabled()
+            page.get_by_role('button', name='前进一页').click()
+            expect(page.locator('.reading-band')).to_have_attribute('data-page', '2')
+            page.get_by_role('button', name='后退一页').click()
+            expect(page.locator('.reading-band')).to_have_attribute('data-page', '1')
             page.get_by_role('button', name='进入专注模式').click()
             assert page.locator('.reader-mode-info').evaluate('(e) => getComputedStyle(e).visibility') == 'hidden'
             page.get_by_role('button', name='退出专注模式').click()
@@ -374,6 +518,7 @@ def main():
                 print('SKIP Windows WebKit offline=True PWA reload: internal navigation error; native_offline.py separately validates bundled-resource-only loading')
             try:
                 assert_guided_reading(page, engine.name)
+                assert_pagination(page, engine.name)
                 assert not errors, errors
             except Exception:
                 page.screenshot(path=str(ARTIFACTS / f'{engine.name}-failure.png'))

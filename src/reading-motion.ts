@@ -1,5 +1,6 @@
 // 版权所有：波哥
 import { floorIndex, type ReadingDocument, type ReadingLayout } from './reading-layout';
+import { MAX_CURSOR_WORDS } from './model';
 
 export type Curve = { times: number[]; values: number[]; slopes: number[] };
 export type MotionRow = {
@@ -46,7 +47,7 @@ export function buildMotion(document: ReadingDocument, layout: ReadingLayout, re
     const row = layout.rows[rowIndex];
     if (row.wordEnd === row.wordStart) continue;
     const wordColumns = row.glyphs.flatMap((glyph, i) => document.wordOrdinal[glyph] >= 0 ? [row.columns[i]] : []);
-    const span = Math.min(wordColumns.length, Math.max(1, Math.min(10, Math.round(requestedSpan))));
+    const span = Math.min(wordColumns.length, Math.max(1, Math.min(MAX_CURSOR_WORDS, Math.round(requestedSpan))));
     const times = Array.from({ length: wordColumns.length - span + 1 }, (_, i) => i);
     const left = times.map(i => wordColumns[i]);
     const right = times.map(i => wordColumns[i + span - 1] + 1);

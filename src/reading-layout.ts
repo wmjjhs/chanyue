@@ -1,5 +1,5 @@
 // 版权所有：波哥
-import type { Book, Settings } from './model';
+import { MIN_FONT_SIZE, type Book, type Settings } from './model';
 
 export type ReadingDocument = {
   glyphs: string[]; offsets: number[]; words: number[]; wordOffsets: number[]; wordOrdinal: number[];
@@ -137,10 +137,35 @@ export function layoutDocument(document: ReadingDocument, width: number, mode: S
   return { rows, rowOf, columns };
 }
 
+export function rowAtSource(document: ReadingDocument, layout: ReadingLayout, source: number) {
+  let low = 0;
+  let high = layout.rows.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (document.offsets[layout.rows[middle].start] <= source) low = middle + 1;
+    else high = middle;
+  }
+  return Math.max(0, low - 1);
+}
+
+export function pagination(rowCount: number, visibleLines: number, rowIndex: number) {
+  const size = Math.max(1, Math.floor(visibleLines));
+  const total = Math.ceil(Math.max(0, rowCount) / size);
+  const current = total ? Math.max(1, Math.min(total, Math.floor(Math.max(0, rowIndex) / size) + 1)) : 0;
+  return { size, total, current };
+}
+
+export function pageTarget(layout: ReadingLayout, visibleLines: number, page: number) {
+  const { size, total } = pagination(layout.rows.length, visibleLines, 0);
+  if (!Number.isInteger(page) || page < 1 || page > total) return null;
+  const rowIndex = (page - 1) * size;
+  return { rowIndex, position: layout.rows[rowIndex].wordStart };
+}
+
 export function readingMetrics(width: number, height: number, settings: Settings) {
   const lineFactor = Math.max(1.9, settings.cursorScale + 0.55);
   const cellFactor = Math.max(1.12, settings.cursorScale + 0.12);
-  const fontSize = Math.min(settings.fontSize, Math.max(10, Math.min(Math.floor(height / 2) / lineFactor, Math.floor((width - 32) / 2) / cellFactor)));
+  const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(Math.floor(height / 2) / lineFactor, Math.floor((width - 32) / 2) / cellFactor)));
   const cellWidth = Math.ceil(fontSize * cellFactor);
   const lineHeight = Math.ceil(fontSize * lineFactor);
   const visibleLines = Math.max(2, Math.min(settings.maxLines, Math.floor(height / lineHeight)));

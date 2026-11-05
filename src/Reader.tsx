@@ -4,7 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { App as NativeApp } from '@capacitor/app';
 import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, Focus, Minimize, RotateCcw } from 'lucide-react';
 import { fonts, readableInk, type Book, type Settings } from './model';
-import { createDocument, floorIndex, initialPosition, layoutDocument, readingMetrics, sourcePosition } from './reading-layout';
+import { createDocument, floorIndex, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
 import { buildMotion, motionFrame } from './reading-motion';
 import { ReadingRenderer } from './reading-renderer';
 
@@ -14,6 +14,9 @@ type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: (
 export default function Reader({ book, settings, onBack, onSettings, onProgress, blocked }: Props) {
   const documentModel = useMemo(() => createDocument(book.lines), [book.lines]);
   const position = useRef(initialPosition(book, documentModel));
+  const manualSource = useRef<number | null>(!book.completed && typeof book.character === 'number' && documentModel.wordOrdinal[floorIndex(documentModel.offsets, book.character)] < 0 ? book.character : null);
+  const pageInput = useRef<HTMLInputElement>(null);
+  const pageLabel = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   const [focused, setFocused] = useState(false);
@@ -34,37 +37,57 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const latest = useRef({ onProgress, documentModel, layout, metrics, motion });
   latest.current = { onProgress, documentModel, layout, metrics, motion };
   const hasWords = documentModel.words.length > 0;
-  const completed = hasWords && position.current >= documentModel.words.length;
+  const completed = hasWords && position.current >= documentModel.words.length && manualSource.current === null;
+  const pageCount = pagination(layout.rows.length, metrics.visibleLines, 0).total;
 
   const setRunning = useCallback((value: boolean) => { playingRef.current = value; setPlaying(value); }, []);
   const persist = useCallback(() => {
     const { documentModel: doc, onProgress: save } = latest.current;
-    if (!doc.words.length) return;
-    const character = sourcePosition(doc, position.current);
-    save({ character, line: floorIndex(doc.lineStarts, character), offset: null, completed: position.current >= doc.words.length });
+    if (!doc.glyphs.length) return;
+    const character = manualSource.current ?? sourcePosition(doc, position.current);
+    save({ character, line: floorIndex(doc.lineStarts, character), offset: null, completed: doc.words.length > 0 && position.current >= doc.words.length && manualSource.current === null });
+  }, []);
+  const currentRow = useCallback(() => {
+    const { documentModel: doc, layout: lines, motion: path } = latest.current;
+    if (manualSource.current !== null) return rowAtSource(doc, lines, manualSource.current);
+    if (path.total && position.current >= path.total) return Math.max(0, lines.rows.length - 1);
+    return motionFrame(path, position.current).rowIndex;
   }, []);
   const paint = useCallback(() => {
     const { motion: path, documentModel: doc, metrics: m, layout: lines } = latest.current;
     const frame = motionFrame(path, position.current);
+    const rowIndex = currentRow();
+    if (manualSource.current !== null && rowIndex !== frame.rowIndex) {
+      frame.rowIndex = rowIndex; frame.y = rowIndex; frame.scroll = rowIndex;
+      frame.x = lines.rows[rowIndex]?.columns[0] ?? 0;
+      frame.width = 1; frame.span = 0; frame.turning = false;
+    }
+    const pages = pagination(lines.rows.length, m.visibleLines, rowIndex);
     renderer.current?.paint(frame);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
     if (band.current) {
       band.current.dataset.position = String(position.current);
-      band.current.dataset.source = String(sourcePosition(doc, position.current));
+      band.current.dataset.source = String(manualSource.current ?? sourcePosition(doc, position.current));
       band.current.dataset.scroll = String(frame.scroll * m.lineHeight);
       band.current.dataset.total = String(doc.words.length);
-      band.current.dataset.row = String(frame.rowIndex);
+      band.current.dataset.row = String(rowIndex);
+      band.current.dataset.page = String(pages.current);
+      band.current.dataset.pages = String(pages.total);
+      band.current.dataset.rows = String(lines.rows.length);
     }
-    const label = !doc.words.length ? '没有可计数的文字（仅有标点或空白）' : position.current >= doc.words.length
+    const label = !doc.words.length ? '没有可计数的文字（仅有标点或空白）' : position.current >= doc.words.length && manualSource.current === null
       ? '已读完 · 愿这一刻的宁静，陪你走远一点'
-      : `第 ${frame.rowIndex + 1} 行 / 共 ${lines.rows.length} 行 · 第 ${word + 1} / ${doc.words.length} 字（不含标点）`;
+      : `第 ${rowIndex + 1} 行 / 共 ${lines.rows.length} 行 · 第 ${word + 1} / ${doc.words.length} 字（不含标点）`;
     if (counter.current && counter.current.textContent !== label) counter.current.textContent = label;
-    if (previousButton.current) previousButton.current.disabled = !path.rows.length || frame.rowIndex === path.rows[0].rowIndex;
-    if (nextButton.current) nextButton.current.disabled = !path.rows.length || frame.rowIndex === path.rows[path.rows.length - 1].rowIndex;
+    const pageText = `第 ${pages.current} / ${pages.total} 页`;
+    if (pageLabel.current && pageLabel.current.textContent !== pageText) pageLabel.current.textContent = pageText;
+    if (pageInput.current) pageInput.current.placeholder = String(pages.current || 1);
+    if (previousButton.current) previousButton.current.disabled = pages.current <= 1;
+    if (nextButton.current) nextButton.current.disabled = pages.current >= pages.total;
     const percent = `${Math.floor(frame.progress * 100)}% 已读`;
     if (progressLabel.current && progressLabel.current.textContent !== percent) progressLabel.current.textContent = percent;
     if (progressFill.current) progressFill.current.style.width = `${frame.progress * 100}%`;
-  }, []);
+  }, [currentRow]);
 
   useLayoutEffect(() => {
     const target = space.current;
@@ -114,21 +137,29 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     };
   }, [pause]);
 
-  const seek = useCallback((next: number) => {
-    setRunning(false); position.current = next; persist(); paint();
+  const seek = useCallback((next: number, source: number | null = null) => {
+    setRunning(false); position.current = next; manualSource.current = source; persist(); paint();
   }, [persist, paint, setRunning]);
   const toggle = useCallback(() => {
     if (!latest.current.documentModel.words.length) return;
     if (playingRef.current) { pause(); return; }
-    if (position.current >= latest.current.documentModel.words.length) seek(0);
+    if (position.current >= latest.current.documentModel.words.length && manualSource.current === null) seek(0);
+    manualSource.current = null;
     setRunning(true);
   }, [pause, seek, setRunning]);
-  const step = useCallback((direction: number) => {
-    const path = latest.current.motion;
-    const row = floorIndex(path.starts, position.current);
-    const next = Math.max(0, Math.min(path.rows.length - 1, row + direction));
-    if (next !== row && path.rows[next]) seek(path.rows[next].start);
+  const goToPage = useCallback((page: number) => {
+    const { layout: lines, metrics: m, documentModel: doc } = latest.current;
+    const target = pageTarget(lines, m.visibleLines, page);
+    if (!target) return;
+    seek(target.position, doc.offsets[lines.rows[target.rowIndex].start]);
+    if (pageInput.current) pageInput.current.value = '';
   }, [seek]);
+  const step = useCallback((direction: number) => {
+    const { layout: lines, metrics: m } = latest.current;
+    const pages = pagination(lines.rows.length, m.visibleLines, currentRow());
+    const next = Math.max(1, Math.min(pages.total, pages.current + direction));
+    if (next !== pages.current) goToPage(next);
+  }, [goToPage, currentRow]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (blocked || event.altKey || event.ctrlKey || event.metaKey || (event.target instanceof HTMLElement && event.target.closest('input,button,select,textarea,[contenteditable=true]'))) return;
@@ -144,7 +175,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const ink = readableInk(settings.pageColor);
   const width = metrics.columns * metrics.cellWidth;
   const modeName = settings.layoutMode === 'semantic' ? '语义段落' : settings.layoutMode === 'plain' ? '无标点密排' : '紧凑排列';
-  return <div className={`reader reader-v2 ${focused ? 'is-focused' : ''}`} style={{ background: settings.pageColor, color: ink, '--reader-ink': ink, '--reader-button-text': settings.pageColor, '--cursor-color': settings.cursorColor, '--cursor-ink': readableInk(settings.cursorColor) } as CSSProperties}>
+  return <div className={`reader reader-v2 ${focused ? 'is-focused' : ''}`} style={{ background: settings.pageColor, color: ink, '--reader-ink': ink, '--reader-button-text': settings.pageColor, '--cursor-color': settings.cursorTransparent ? 'transparent' : settings.cursorColor, '--cursor-ink': settings.cursorTransparent ? settings.textColor : readableInk(settings.cursorColor) } as CSSProperties}>
     <header className="reader-header">
       <button className="reader-back" aria-label="返回书架" onClick={() => { pause(); onBack(); }}><ArrowLeft size={19} /><span>返回书架</span></button>
       <div className="reader-book-name"><span>循字而读 · 不必追赶</span><strong>{book.title}</strong></div>
@@ -162,10 +193,22 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     </main>
     <div className="reading-under v2-controls">
       <div className="line-counter" ref={counter} aria-live={playing ? 'off' : 'polite'} />
-      <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label="后退1行" onClick={() => step(-1)}><SkipBack size={21} /><span>后退一行</span></button><button className="play-button" disabled={!hasWords} aria-label={playing ? '停止' : completed ? '重新阅读' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{playing ? '停止' : completed ? '重新阅读' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label="前进1行" onClick={() => step(1)}><SkipForward size={21} /><span>前进一行</span></button></div>
+      <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label="后退一页" onClick={() => step(-1)}><SkipBack size={21} /><span>后退一页</span></button><button className="play-button" disabled={!hasWords} aria-label={playing ? '停止' : completed ? '重新阅读' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{playing ? '停止' : completed ? '重新阅读' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label="前进一页" onClick={() => step(1)}><SkipForward size={21} /><span>前进一页</span></button></div>
+      <form className="page-navigation" aria-label="页码跳转" onSubmit={event => {
+        event.preventDefault();
+        const input = pageInput.current;
+        if (!input) return;
+        goToPage(input.valueAsNumber);
+        input.blur();
+      }}>
+        <span ref={pageLabel} aria-live={playing ? 'off' : 'polite'} />
+        <label htmlFor="reading-page" className="sr-only">跳转页码</label>
+        <input id="reading-page" ref={pageInput} type="number" inputMode="numeric" min="1" max={pageCount || 1} step="1" required disabled={!pageCount} onFocus={pause} aria-label="跳转页码" />
+        <button type="submit" disabled={!pageCount}>跳转</button>
+      </form>
       <p className="reader-hint">{playing ? '连续滑窗 · 弧线换行 · 标点不计时' : '从容跟随中心光标；不适时请暂停休息'}</p>
     </div>
-    <footer className="reader-footer"><span>禅阅 <i /> 每一个字，都从容</span><span className="keyboard-tip">空格 开始 / 停止 <b>·</b> ← → 切换视觉行</span><span ref={progressLabel} /></footer>
+    <footer className="reader-footer"><span>禅阅 <i /> 每一个字，都从容</span><span className="keyboard-tip">空格 开始 / 停止 <b>·</b> ← → 前后翻页</span><span ref={progressLabel} /></footer>
     <div className="reader-progress"><i ref={progressFill} /></div>
   </div>;
 }

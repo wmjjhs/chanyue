@@ -28,6 +28,7 @@ export type Settings = {
   maxLines: number;
   layoutMode: 'semantic' | 'compact' | 'plain';
   cursorColor: string;
+  cursorTransparent: boolean;
   cursorScale: number;
   cursorWords: number;
 };
@@ -39,11 +40,14 @@ export const fonts = {
 };
 
 export const MAX_READING_SPEED = 1600;
+export const MIN_FONT_SIZE = 12;
+export const MAX_VISIBLE_LINES = 15;
+export const MAX_CURSOR_WORDS = 50;
 
 export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
   lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
-  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorScale: 1.35, cursorWords: 1,
+  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorTransparent: false, cursorScale: 1.35, cursorWords: 1,
 };
 
 export const themes = [
@@ -61,16 +65,17 @@ export function validateSettings(value: unknown): Settings {
   return {
     version: 2,
     font: v.font && Object.hasOwn(fonts, v.font) ? v.font : defaultSettings.font,
-    fontSize: number(v.fontSize, 18, 64, defaultSettings.fontSize),
+    fontSize: number(v.fontSize, MIN_FONT_SIZE, 64, defaultSettings.fontSize),
     speed: v.version === 2 ? number(v.speed, 30, MAX_READING_SPEED, defaultSettings.speed) : defaultSettings.speed,
     textColor: color(v.textColor, defaultSettings.textColor),
     lineColor: color(v.lineColor, defaultSettings.lineColor),
     pageColor: color(v.pageColor, defaultSettings.pageColor),
-    maxLines: Math.round(number(v.maxLines, 2, 12, defaultSettings.maxLines)),
+    maxLines: Math.round(number(v.maxLines, 2, MAX_VISIBLE_LINES, defaultSettings.maxLines)),
     layoutMode: v.layoutMode === 'compact' || v.layoutMode === 'plain' ? v.layoutMode : 'semantic',
     cursorColor: color(v.cursorColor, defaultSettings.cursorColor),
+    cursorTransparent: typeof v.cursorTransparent === 'boolean' ? v.cursorTransparent : defaultSettings.cursorTransparent,
     cursorScale: number(v.cursorScale, 1, 2, defaultSettings.cursorScale),
-    cursorWords: Math.round(number(v.cursorWords, 1, 10, defaultSettings.cursorWords)),
+    cursorWords: Math.round(number(v.cursorWords, 1, MAX_CURSOR_WORDS, defaultSettings.cursorWords)),
   };
 }
 

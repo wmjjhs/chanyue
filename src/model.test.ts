@@ -1,7 +1,7 @@
 // 版权所有：波哥
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, MAX_READING_SPEED, progressOf, splitLines, validateSettings } from './model';
-import { createDocument, glyphPosition, initialPosition, layoutDocument, readingMetrics, sourcePosition } from './reading-layout';
+import { createDocument, glyphPosition, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
 import { buildMotion, focusWeight, motionFrame } from './reading-motion';
 import { decodeText, importBook } from './importer';
 import { sampleBooks } from './samples';
@@ -34,12 +34,15 @@ describe('阅读设置与进度', () => {
   it('字速、行数、倍率和配色有边界校验', () => {
     expect(validateSettings({ ...defaultSettings, speed: 1600 }).speed).toBe(1600);
     expect(validateSettings({ ...defaultSettings, speed: -1 }).speed).toBe(30);
-    expect(validateSettings({ ...defaultSettings, maxLines: 999, cursorScale: 9, cursorColor: 'url(x)' }))
-      .toMatchObject({ maxLines: 12, cursorScale: 2, cursorColor: defaultSettings.cursorColor });
+    expect(validateSettings({ ...defaultSettings, fontSize: 0, maxLines: 999, cursorScale: 9, cursorColor: 'url(x)' }))
+      .toMatchObject({ fontSize: 12, maxLines: 15, cursorScale: 2, cursorColor: defaultSettings.cursorColor });
+    expect(validateSettings({ fontSize: 12, maxLines: 15 })).toMatchObject({ fontSize: 12, maxLines: 15 });
+    expect(validateSettings({ cursorTransparent: true }).cursorTransparent).toBe(true);
+    for (const value of ['true', 1, null, undefined]) expect(validateSettings({ cursorTransparent: value }).cursorTransparent).toBe(false);
   });
-  it('窗口字数限制1–10，旧v2设置保留字速并默认1字窗口', () => {
-    expect(validateSettings({ version: 2, speed: 600 })).toMatchObject({ speed: 600, cursorWords: 1 });
-    for (const [input, output] of [[0, 1], [11, 10], [4.6, 5], [NaN, 1], [Infinity, 1]]) {
+  it('窗口字数限制1–50，旧v2设置保留字速并默认有色1字窗口', () => {
+    expect(validateSettings({ version: 2, speed: 600 })).toMatchObject({ speed: 600, cursorWords: 1, cursorTransparent: false });
+    for (const [input, output] of [[0, 1], [11, 11], [50, 50], [51, 50], [4.6, 5], [NaN, 1], [Infinity, 1]]) {
       expect(validateSettings({ ...defaultSettings, cursorWords: input }).cursorWords).toBe(output);
     }
     expect(validateSettings({ layoutMode: 'plain' }).layoutMode).toBe('plain');
@@ -132,10 +135,10 @@ describe('连续滑窗与纯文字时钟', () => {
     expect(initialPosition({ ...sampleBooks[0], character: undefined, line: 1 }, doc)).toBe(2);
     expect(initialPosition({ ...sampleBooks[0], completed: true }, doc)).toBe(4);
   });
-  it('1–10字窗口的纯文字宽度正确，沿行连续移动而非逐格跳动', () => {
+  it('1–50字窗口的纯文字宽度正确，沿行连续移动而非逐格跳动', () => {
     const doc = createDocument(['甲乙丙丁戊己庚辛壬癸'.repeat(6)]);
-    const layout = layoutDocument(doc, 20, 'compact');
-    for (let span = 1; span <= 10; span++) {
+    const layout = layoutDocument(doc, 60, 'compact');
+    for (let span = 1; span <= 50; span++) {
       const motion = buildMotion(doc, layout, span);
       for (const clock of [0, 0.25, 2.5, 10.125, 18.5, 19.9, 20]) {
         expect(motionFrame(motion, clock).width).toBeCloseTo(span);
@@ -153,7 +156,7 @@ describe('连续滑窗与纯文字时钟', () => {
     const motion = buildMotion(doc, layout, 3);
     expect(motionFrame(motion, 0)).toMatchObject({ x: 0, width: 5, span: 3 });
     expect(motionFrame(motion, motion.total)).toMatchObject({ x: 4, width: 6 });
-    expect(motionFrame(buildMotion(doc, layout, 10), 0)).toMatchObject({ x: 0, width: 10, span: 5 });
+    expect(motionFrame(buildMotion(doc, layout, 50), 0)).toMatchObject({ x: 0, width: 10, span: 5 });
     expect(motion.total).toBe(5);
   });
   it('长短行和密集标点下，上移保持单调且边界速度连续', () => {
@@ -227,6 +230,61 @@ describe('连续滑窗与纯文字时钟', () => {
         }
       }
     }
+  });
+});
+
+describe('按实际行数分页', () => {
+  it('不足一页、整页、末页及页首边界统计正确', () => {
+    expect(pagination(0, 15, 0)).toEqual({ size: 15, total: 0, current: 0 });
+    expect(pagination(1, 15, 0)).toEqual({ size: 15, total: 1, current: 1 });
+    expect(pagination(30, 15, 14)).toEqual({ size: 15, total: 2, current: 1 });
+    expect(pagination(30, 15, 15)).toEqual({ size: 15, total: 2, current: 2 });
+    expect(pagination(31, 15, 31)).toEqual({ size: 15, total: 3, current: 3 });
+  });
+  it('跳转落在目标页首并拒绝空、越界、小数及非有限页码', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸'.repeat(4)]);
+    const layout = layoutDocument(doc, 2, 'plain');
+    expect(pageTarget(layout, 6, 1)).toEqual({ rowIndex: 0, position: 0 });
+    expect(pageTarget(layout, 6, 3)).toEqual({ rowIndex: 12, position: 24 });
+    expect(pageTarget(layout, 6, 4)).toEqual({ rowIndex: 18, position: 36 });
+    for (const page of [0, -1, 1.5, 5, NaN, Infinity]) expect(pageTarget(layout, 6, page)).toBeNull();
+    expect(pageTarget(layoutDocument(createDocument([]), 10, 'plain'), 6, 1)).toBeNull();
+  });
+  it('12px可显示15行，空间受限时按实际可见行数分页', () => {
+    const settings = { ...defaultSettings, fontSize: 12, maxLines: 15, cursorScale: 1 };
+    const tall = readingMetrics(390, 700, settings);
+    expect(tall.fontSize).toBe(12);
+    expect(tall.visibleLines).toBe(15);
+    const short = readingMetrics(700, 100, settings);
+    expect(short.visibleLines).toBeLessThan(15);
+    expect(pagination(40, short.visibleLines, 0).total).toBe(Math.ceil(40 / short.visibleLines));
+  });
+  it('三种排版和方向重新分页，不修改保存的源字符位置', () => {
+    const doc = createDocument(['第一段，读书。'.repeat(8), '第二段，慢慢读。'.repeat(8)]);
+    const source = sourcePosition(doc, 30.25);
+    const totals = new Set<number>();
+    for (const mode of ['semantic', 'compact', 'plain'] as const) {
+      for (const width of [4, 12]) {
+        const layout = layoutDocument(doc, width, mode);
+        const row = rowAtSource(doc, layout, source);
+        totals.add(pagination(layout.rows.length, 3, row).total);
+        expect(glyphPosition(doc, source)).toBeCloseTo(30.25);
+        const target = pageTarget(layout, 3, pagination(layout.rows.length, 3, row).current)!;
+        expect(target.rowIndex).toBeLessThanOrEqual(row);
+        expect(row - target.rowIndex).toBeLessThan(3);
+      }
+    }
+    expect(totals.size).toBeGreaterThan(1);
+  });
+  it('仅标点的页面仍计入页数，尾部标点可定位而不增加计时字数', () => {
+    const doc = createDocument(['甲乙', '！！', '？？', '。。', '丙丁', '……']);
+    const layout = layoutDocument(doc, 2, 'semantic');
+    expect(pagination(layout.rows.length, 2, 0).total).toBe(3);
+    const target = pageTarget(layout, 2, 2)!;
+    expect(target).toEqual({ rowIndex: 2, position: 2 });
+    expect(rowAtSource(doc, layout, doc.offsets[layout.rows[2].start])).toBe(2);
+    expect(rowAtSource(doc, layout, doc.length)).toBe(5);
+    expect(buildMotion(doc, layout, 50).total).toBe(4);
   });
 });
 

@@ -20,7 +20,7 @@ export class ReadingRenderer {
     private metrics: Metrics, private settings: Settings,
   ) {
     this.textRGB = rgb(settings.textColor);
-    this.cursorRGB = rgb(readableInk(settings.cursorColor));
+    this.cursorRGB = settings.cursorTransparent ? this.textRGB : rgb(readableInk(settings.cursorColor));
   }
 
   private populate(rowIndex: number, recycled?: RowView): RowView {
@@ -68,7 +68,7 @@ export class ReadingRenderer {
       const top = `${(1 + rowIndex - first) * m.lineHeight}px`;
       if (row.element.style.top !== top) row.element.style.top = top;
       for (const cell of row.cells) {
-        const weight = focusWeight(cell.column, rowIndex, frame);
+        const weight = frame.span ? focusWeight(cell.column, rowIndex, frame) : 0;
         if (Math.abs(weight - cell.focus) > 0.00005) {
           const scale = 1 + (settings.cursorScale - 1) * weight;
           cell.inner.style.transform = `scale(${scale})`;
@@ -87,7 +87,7 @@ export class ReadingRenderer {
       nearest?.classList.add('is-current');
       this.current = nearest;
     }
-    this.cursor.hidden = !this.document.words.length;
+    this.cursor.hidden = !this.document.words.length || frame.span === 0;
     this.cursor.style.width = `${frame.width * m.cellWidth}px`;
     this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(1 + frame.y - frame.scroll) * m.lineHeight}px, 0)`;
     this.cursor.dataset.phase = frame.turning ? 'return' : 'scan';

@@ -59,7 +59,10 @@ def main():
             assert_reader_layout(page)
             page.get_by_role('button', name='阅读设置', exact=True).click()
             page.get_by_role('button', name='无标点密排', exact=True).click()
-            page.locator('#cursor-words').fill('10')
+            page.locator('#cursor-words').fill('50')
+            page.locator('#font-size').fill('12')
+            page.locator('#max-lines').fill('15')
+            page.locator('#cursor-transparent').check()
             page.get_by_role('button', name='完成设置').click()
             page.get_by_role('button', name='开始', exact=True).click()
             page.wait_for_timeout(250)
@@ -72,7 +75,10 @@ def main():
             expect(page.locator('.flowing-text')).to_contain_text('完全离线')
             assert abs(float(page.locator('.reading-band').get_attribute('data-source')) - source) < 0.0001
             expect(page.locator('.reading-band')).to_have_attribute('data-mode', 'plain')
-            expect(page.locator('.reading-band')).to_have_attribute('data-cursor-words', '10')
+            expect(page.locator('.reading-band')).to_have_attribute('data-cursor-words', '50')
+            expect(page.locator('.reading-band')).to_have_attribute('data-max-lines', '15')
+            expect(page.locator('.reading-band')).to_have_css('font-size', '12px')
+            expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
             expect(page.locator('.reading-glyph[data-word="-1"]')).to_have_count(0)
             assert not errors, errors
             assert not external, external
