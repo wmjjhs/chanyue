@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as NativeApp } from '@capacitor/app';
-import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, Focus, Minimize, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, RotateCcw, CornerDownLeft } from 'lucide-react';
 import { fonts, readableInk, type Book, type Settings } from './model';
 import { createDocument, floorIndex, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
 import { buildMotion, motionFrame } from './reading-motion';
@@ -19,7 +19,6 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const pageLabel = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
-  const [focused, setFocused] = useState(false);
   const [bounds, setBounds] = useState({ width: 320, height: 320 });
   const space = useRef<HTMLDivElement>(null);
   const band = useRef<HTMLDivElement>(null);
@@ -60,8 +59,9 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (manualSource.current !== null && rowIndex !== frame.rowIndex) {
       frame.rowIndex = rowIndex; frame.y = rowIndex; frame.scroll = rowIndex;
       frame.x = lines.rows[rowIndex]?.columns[0] ?? 0;
-      frame.width = 1; frame.span = 0; frame.turning = false;
+      frame.width = 1; frame.span = 0; frame.inkX = frame.x;
     }
+    if (manualSource.current !== null) frame.completed = false;
     const pages = pagination(lines.rows.length, m.visibleLines, rowIndex);
     renderer.current?.paint(frame);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
@@ -166,7 +166,6 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       if (event.code === 'Space') { event.preventDefault(); toggle(); }
       if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
       if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
-      if (event.key === 'Escape') setFocused(false);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -174,16 +173,14 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
 
   const ink = readableInk(settings.pageColor);
   const width = metrics.columns * metrics.cellWidth;
-  const modeName = settings.layoutMode === 'semantic' ? '语义段落' : settings.layoutMode === 'plain' ? '无标点密排' : '紧凑排列';
-  return <div className={`reader reader-v2 ${focused ? 'is-focused' : ''}`} style={{ background: settings.pageColor, color: ink, '--reader-ink': ink, '--reader-button-text': settings.pageColor, '--cursor-color': settings.cursorTransparent ? 'transparent' : settings.cursorColor, '--cursor-ink': settings.cursorTransparent ? settings.textColor : readableInk(settings.cursorColor) } as CSSProperties}>
+  return <div className="reader reader-v2" style={{ background: settings.pageColor, color: ink, '--reader-ink': ink, '--reader-button-text': settings.pageColor, '--cursor-color': settings.cursorTransparent ? 'transparent' : settings.cursorColor } as CSSProperties}>
     <header className="reader-header">
-      <button className="reader-back" aria-label="返回书架" onClick={() => { pause(); onBack(); }}><ArrowLeft size={19} /><span>返回书架</span></button>
-      <div className="reader-book-name"><span>循字而读 · 不必追赶</span><strong>{book.title}</strong></div>
-      <div className="reader-tools"><button className="icon-button focus-toggle" aria-label={focused ? '退出专注模式' : '进入专注模式'} onClick={() => setFocused(value => !value)}>{focused ? <Minimize size={20} /> : <Focus size={20} />}</button><button className="icon-button" aria-label="阅读设置" onClick={() => { pause(); onSettings(); }}><SlidersHorizontal size={20} /></button></div>
+      <button className="reader-back" aria-label="返回书架" title="返回书架" onClick={() => { pause(); onBack(); }}><ArrowLeft size={20} /></button>
+      <div className="reader-book-name"><strong title={book.title}>{book.title}</strong></div>
+      <button className="icon-button reader-settings" aria-label="阅读设置" title="阅读设置" onClick={() => { pause(); onSettings(); }}><SlidersHorizontal size={20} /></button>
     </header>
-    <div className="reader-mode-info"><span>{modeName}</span><i />{settings.speed} 字/分钟<i />窗口 {settings.cursorWords} 字<i />最多 {metrics.visibleLines} 行{metrics.fontSize < settings.fontSize - 1 && <span> · 已适配字号</span>}</div>
     <main className="reading-workspace" ref={space}>
-      <div className="reading-band multiline-band" ref={band} data-testid="reading-band" data-max-lines={settings.maxLines} data-visible-lines={metrics.visibleLines} data-line-height={metrics.lineHeight} data-cell-width={metrics.cellWidth} data-columns={metrics.columns} data-mode={settings.layoutMode} data-cursor-words={settings.cursorWords}
+      <div className="reading-band multiline-band" ref={band} data-testid="reading-band" data-max-lines={settings.maxLines} data-visible-lines={metrics.visibleLines} data-line-height={metrics.lineHeight} data-cell-width={metrics.cellWidth} data-columns={metrics.columns} data-mode={settings.layoutMode} data-cursor-words={settings.cursorWords} data-cursor-mode={settings.cursorMode}
         style={{ width: width + 32, height: metrics.lineHeight * metrics.visibleLines, background: settings.lineColor, color: settings.textColor, fontSize: metrics.fontSize, fontFamily: fonts[settings.font], '--cell-width': `${metrics.cellWidth}px`, '--line-height': `${metrics.lineHeight}px` } as CSSProperties}>
         <div className="reading-grid" style={{ width }}>
           <div className="flowing-text multiline-text" ref={text} aria-label="阅读正文" />
@@ -192,7 +189,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       </div>
     </main>
     <div className="reading-under v2-controls">
-      <div className="line-counter" ref={counter} aria-live={playing ? 'off' : 'polite'} />
+      <div className="line-counter sr-only" ref={counter} aria-live={playing ? 'off' : 'polite'} />
       <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label="后退一页" onClick={() => step(-1)}><SkipBack size={21} /><span>后退一页</span></button><button className="play-button" disabled={!hasWords} aria-label={playing ? '停止' : completed ? '重新阅读' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{playing ? '停止' : completed ? '重新阅读' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label="前进一页" onClick={() => step(1)}><SkipForward size={21} /><span>前进一页</span></button></div>
       <form className="page-navigation" aria-label="页码跳转" onSubmit={event => {
         event.preventDefault();
@@ -203,12 +200,11 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       }}>
         <span ref={pageLabel} aria-live={playing ? 'off' : 'polite'} />
         <label htmlFor="reading-page" className="sr-only">跳转页码</label>
-        <input id="reading-page" ref={pageInput} type="number" inputMode="numeric" min="1" max={pageCount || 1} step="1" required disabled={!pageCount} onFocus={pause} aria-label="跳转页码" />
-        <button type="submit" disabled={!pageCount}>跳转</button>
+        <input id="reading-page" ref={pageInput} type="number" inputMode="numeric" enterKeyHint="go" min="1" max={pageCount || 1} step="1" required disabled={!pageCount} onFocus={pause} aria-label="跳转页码" />
+        <button type="submit" aria-label="跳转" title="跳转到指定页" disabled={!pageCount}><CornerDownLeft size={16} /></button>
+        <span className="reading-progress-label" ref={progressLabel} />
       </form>
-      <p className="reader-hint">{playing ? '连续滑窗 · 弧线换行 · 标点不计时' : '从容跟随中心光标；不适时请暂停休息'}</p>
+      <div className="reader-progress" aria-hidden="true"><i ref={progressFill} /></div>
     </div>
-    <footer className="reader-footer"><span>禅阅 <i /> 每一个字，都从容</span><span className="keyboard-tip">空格 开始 / 停止 <b>·</b> ← → 前后翻页</span><span ref={progressLabel} /></footer>
-    <div className="reader-progress"><i ref={progressFill} /></div>
   </div>;
 }

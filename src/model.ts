@@ -29,8 +29,9 @@ export type Settings = {
   layoutMode: 'semantic' | 'compact' | 'plain';
   cursorColor: string;
   cursorTransparent: boolean;
-  cursorScale: number;
+  cursorThickness: number;
   cursorWords: number;
+  cursorMode: 'pointer' | 'trail';
 };
 
 export const fonts = {
@@ -43,11 +44,12 @@ export const MAX_READING_SPEED = 1600;
 export const MIN_FONT_SIZE = 12;
 export const MAX_VISIBLE_LINES = 15;
 export const MAX_CURSOR_WORDS = 50;
+export const MAX_CURSOR_THICKNESS = 6;
 
 export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
   lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
-  maxLines: 6, layoutMode: 'semantic', cursorColor: '#d5e2b4', cursorTransparent: false, cursorScale: 1.35, cursorWords: 1,
+  maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer',
 };
 
 export const themes = [
@@ -74,8 +76,9 @@ export function validateSettings(value: unknown): Settings {
     layoutMode: v.layoutMode === 'compact' || v.layoutMode === 'plain' ? v.layoutMode : 'semantic',
     cursorColor: color(v.cursorColor, defaultSettings.cursorColor),
     cursorTransparent: typeof v.cursorTransparent === 'boolean' ? v.cursorTransparent : defaultSettings.cursorTransparent,
-    cursorScale: number(v.cursorScale, 1, 2, defaultSettings.cursorScale),
+    cursorThickness: Math.round(number(v.cursorThickness, 1, MAX_CURSOR_THICKNESS, defaultSettings.cursorThickness)),
     cursorWords: Math.round(number(v.cursorWords, 1, MAX_CURSOR_WORDS, defaultSettings.cursorWords)),
+    cursorMode: v.cursorMode === 'trail' ? 'trail' : 'pointer',
   };
 }
 

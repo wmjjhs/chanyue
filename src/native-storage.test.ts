@@ -60,9 +60,11 @@ describe('原生持久化适配器（模拟插件）', () => {
     expect([...state.preferences.keys()].some(key => key.startsWith('chanyue-position:'))).toBe(false);
   });
   it('原生设置保持12px、15行、50字窗口、透明光标与无标点模式', async () => {
-    const settings = { ...defaultSettings, speed: 1600, pageColor: '#123456', fontSize: 12, maxLines: 15, cursorWords: 50, cursorTransparent: true, layoutMode: 'plain' as const };
-    await saveNativeSettings(settings);
-    expect(await loadNativeSettings()).toEqual(settings);
+    const settings = { ...defaultSettings, speed: 1600, pageColor: '#123456', fontSize: 12, maxLines: 15, cursorWords: 50, cursorTransparent: true, cursorThickness: 6, cursorColor: '#e5b77b', layoutMode: 'plain' as const };
+    for (const cursorMode of ['pointer', 'trail'] as const) {
+      await saveNativeSettings({ ...settings, cursorMode });
+      expect(await loadNativeSettings()).toEqual({ ...settings, cursorMode });
+    }
   });
   it('磁盘写失败会报告错误，后续队列仍可使用', async () => {
     state.failWrite = true;

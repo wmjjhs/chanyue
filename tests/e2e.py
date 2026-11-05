@@ -98,7 +98,27 @@ def assert_reader_layout(page):
     assert page.locator('.flowing-text').evaluate('(e) => new DOMMatrix(getComputedStyle(e).transform).m41') == 0
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     expect(page.locator('.reading-glyph.is-current')).to_have_count(1)
-    assert page.locator('.scan-cursor').evaluate('e => {const c=e.getBoundingClientRect(),g=document.querySelector(".reading-grid").getBoundingClientRect();return c.width>0&&c.left>=g.left-1&&c.right<=g.right+1;}')
+    if page.locator('.reading-band').get_attribute('data-cursor-mode') == 'pointer':
+        assert page.locator('.scan-cursor').evaluate('e => {const c=e.getBoundingClientRect(),g=document.querySelector(".reading-grid").getBoundingClientRect();return c.width>0&&c.left>=g.left-1&&c.right<=g.right+1&&c.height>=1&&c.height<=6;}')
+        expect(page.locator('.reading-trail:not([hidden])')).to_have_count(0)
+    else:
+        expect(page.locator('.scan-cursor')).to_be_hidden()
+        assert page.locator('.reading-trail').count() == page.locator('.reading-row').count()
+    assert page.evaluate('''() => {
+        const center=e=>{const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};};
+        const header=document.querySelector('.reader-header');
+        const top=[...header.children].map(center);
+        const buttons=[...document.querySelectorAll('.reader-controls button')].map(center);
+        const bottom=[...document.querySelector('.page-navigation').children].filter(e=>!e.classList.contains('sr-only')).map(center);
+        const workspace=document.querySelector('.reading-workspace').getBoundingClientRect();
+        const band=document.querySelector('.reading-band').getBoundingClientRect();
+        return header.getBoundingClientRect().height<=48 && top.length===3 && Math.max(...top.map(p=>p.y))-Math.min(...top.map(p=>p.y))<1
+            && Math.abs(buttons[1].x-innerWidth/2)<1 && Math.abs((buttons[0].x+buttons[2].x)/2-buttons[1].x)<1
+            && Math.max(...buttons.map(p=>p.y))-Math.min(...buttons.map(p=>p.y))<1
+            && Math.max(...bottom.map(p=>p.y))-Math.min(...bottom.map(p=>p.y))<1
+            && workspace.height>=innerHeight-160 && band.y<=header.getBoundingClientRect().bottom+8;
+    }''')
+    assert page.locator('.reading-glyph > span').evaluate_all('(nodes)=>nodes.every(e=>getComputedStyle(e).transform==="none")')
 
 
 def sample_motion(page, duration):
@@ -115,8 +135,10 @@ def sample_motion(page, duration):
             const replaced=[...nodes].some(([key,e])=>previousNodes.has(key)&&previousNodes.get(key)!==e);
             previousNodes=nodes;
             samples.push({time, position:Number(band.dataset.position), scroll:Number(band.dataset.scroll),
-                x:matrix.m41,y:matrix.m42,width:cursor.getBoundingClientRect().width,phase:cursor.dataset.phase,
-                rows,replaced,focus:[...document.querySelectorAll('.reading-glyph')].map(e=>Number(e.dataset.focus))});
+                x:matrix.m41,y:matrix.m42,width:cursor.getBoundingClientRect().width,phase:cursor.dataset.phase,row:Number(band.dataset.row),
+                rows,replaced,unscaled:[...document.querySelectorAll('.reading-glyph > span')].every(e=>getComputedStyle(e).transform==='none'&&getComputedStyle(e).color===getComputedStyle(band).color),
+                underlineHeight:cursor.getBoundingClientRect().height,
+                below:cursor.getBoundingClientRect().top>=document.querySelector('.is-current > span').getBoundingClientRect().bottom+1});
             if(time-started>duration)resolve(samples);else requestAnimationFrame(tick);
         };requestAnimationFrame(tick);
     })''', duration)
@@ -132,13 +154,14 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='紧凑排列', exact=True).click()
     page.locator('#font-size').fill('28')
     page.locator('#max-lines').fill('4')
-    page.locator('#cursor-scale').fill('1.5')
-    page.get_by_label('光标颜色', exact=True).fill('#e5b77b')
+    page.locator('#cursor-thickness').fill('3')
+    page.get_by_label('下划线颜色', exact=True).fill('#e5b77b')
     page.locator('#reading-speed').fill('600')
     page.get_by_role('button', name='完成设置').click()
     assert_reader_layout(page)
     expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgb(229, 183, 123)')
-    assert page.locator('.is-current > span').evaluate('(e)=>new DOMMatrix(getComputedStyle(e).transform).a') == 1.5
+    expect(page.locator('.is-current > span')).to_have_css('transform', 'none')
+    expect(page.locator('.scan-cursor')).to_have_css('height', '3px')
     cols = int(page.locator('.reading-band').get_attribute('data-columns'))
     assert page.locator('.reading-row').first.locator('[data-char]').count() == cols
     page.get_by_role('button', name='开始', exact=True).click()
@@ -146,21 +169,25 @@ def assert_guided_reading(page, engine):
     height = float(page.locator('.reading-band').get_attribute('data-line-height'))
     cell_width = float(page.locator('.reading-band').get_attribute('data-cell-width'))
     assert samples[-1]['position'] - samples[0]['position'] > cols * 2
-    assert any(sample['phase'] == 'return' for sample in samples)
+    assert all(sample['phase'] == 'scan' for sample in samples)
+    assert samples[-1]['row'] > samples[0]['row']
     fractional_moves = 0
     for previous, current in zip(samples, samples[1:]):
         delta = min(0.1, (current['time'] - previous['time']) / 1000)
         advance = current['position'] - previous['position']
         assert abs(advance - 10 * delta) < 0.2, (previous, current)
         assert abs(current['scroll'] - previous['scroll'] - advance * height / cols) < 0.05
-        assert abs(current['x'] - previous['x']) / cell_width <= cols * advance * 1.2 + 0.01
-        assert abs(current['y'] - previous['y']) / height <= 2 * advance + 0.01
+        assert abs(current['y'] - previous['y'] - (current['row'] - previous['row']) * height + current['scroll'] - previous['scroll']) < 0.02
+        expected_x = (current['position'] - current['row'] * cols) / cols * (cols - 1) * cell_width
+        assert abs(current['x'] - expected_x) < 0.02
+        if current['row'] == previous['row']:
+            assert abs(current['x'] - previous['x'] - (cols - 1) / cols * cell_width * advance) < 0.02
         assert abs(current['width'] - cell_width) < 0.1
         assert not current['replaced']
         assert len(current['rows']) <= 9
-        assert all(0 <= weight <= 1 for weight in current['focus'])
+        assert current['unscaled'] and current['below'] and abs(current['underlineHeight'] - 3) < 0.01, current
         column = current['x'] / cell_width
-        if abs(column - round(column)) > 0.001 and abs(current['x'] - previous['x']) > 0.001:
+        if current['row'] == previous['row'] and abs(column - round(column)) > 0.001 and abs(current['x'] - previous['x']) > 0.001:
             fractional_moves += 1
         for row in current['rows'].keys() & previous['rows'].keys():
             assert current['rows'][row]['x'] == 0
@@ -178,12 +205,13 @@ def assert_guided_reading(page, engine):
     assert abs(position(page) - saved) < 0.0001
     page.get_by_role('button', name='阅读设置', exact=True).click()
     expect(page.locator('#max-lines')).to_have_value('4')
-    expect(page.locator('#cursor-scale')).to_have_value('1.5')
+    expect(page.locator('#cursor-thickness')).to_have_value('3')
+    expect(page.locator('#cursor-scale')).to_have_count(0)
     expect(page.locator('#cursor-words')).to_have_value('1')
     page.get_by_role('button', name='无标点密排', exact=True).click()
     page.locator('#cursor-words').fill('10')
     page.locator('#font-size').fill('18')
-    page.locator('#cursor-scale').fill('1')
+    page.locator('#cursor-thickness').fill('1')
     page.get_by_role('button', name='完成设置').click()
     expect(page.locator('.reading-band')).to_have_attribute('data-mode', 'plain')
     expect(page.locator('.reading-band')).to_have_attribute('data-source', source)
@@ -203,7 +231,7 @@ def assert_guided_reading(page, engine):
     expect(page.locator('#cursor-words')).to_have_value('10')
     expect(page.get_by_role('button', name='无标点密排', exact=True)).to_have_attribute('aria-pressed', 'true')
     page.locator('#cursor-words').fill('5')
-    page.locator('#cursor-scale').fill('1.5')
+    page.locator('#cursor-thickness').fill('3')
     page.get_by_role('button', name='语义段落', exact=True).click()
     page.locator('#max-lines').fill('12')
     page.locator('#font-size').fill('44')
@@ -214,7 +242,7 @@ def assert_guided_reading(page, engine):
     page.get_by_role('button', name='阅读设置', exact=True).click()
     page.get_by_role('button', name='夜读', exact=True).click()
     page.locator('#font-size').fill('64')
-    page.locator('#cursor-scale').fill('2')
+    page.locator('#cursor-thickness').fill('6')
     page.locator('#reading-speed').fill('1600')
     page.get_by_role('button', name='完成设置').click()
     page.set_viewport_size({'width': 844, 'height': 390})
@@ -318,7 +346,7 @@ def assert_guided_reading(page, engine):
     expect(page.locator('.line-counter')).to_contain_text('没有可计数的文字')
     expect(page.locator('.scan-cursor')).to_be_hidden()
     page.get_by_role('button', name='返回书架').click()
-    print(f'PASS {engine}: continuous cursor/arc, stable DOM rows, punctuation-free timing, 1/5/10-word windows, three layouts, resume, orientation, 1600 chars/min, completion/restart')
+    print(f'PASS {engine}: continuous pointer/direct line switch, stable DOM rows, punctuation-free timing, 1/5/10-word windows, three layouts, resume, orientation, 1600 chars/min, completion/restart')
 
 
 def assert_pagination(page, engine):
@@ -332,10 +360,10 @@ def assert_pagination(page, engine):
     page.locator('#font-size').fill('12')
     page.locator('#max-lines').fill('15')
     page.locator('#cursor-words').fill('50')
-    page.locator('#cursor-scale').fill('1.5')
+    page.locator('#cursor-thickness').fill('3')
     page.locator('#cursor-transparent').check()
-    expect(page.get_by_label('光标颜色', exact=True)).to_be_disabled()
-    expect(page.locator('.preview-window')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+    expect(page.get_by_label('下划线颜色', exact=True)).to_be_disabled()
+    expect(page.locator('.preview-underline')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
     expect(page.locator('.settings-preview')).to_contain_text('预览仅示意10字')
     page.get_by_role('button', name='完成设置').click()
     band = page.locator('.reading-band')
@@ -345,7 +373,7 @@ def assert_pagination(page, engine):
     expect(band).to_have_attribute('data-cursor-words', '50')
     expect(page.locator('.scan-cursor')).to_have_attribute('data-span', '50')
     expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
-    assert page.locator('.is-current > span').evaluate('(e)=>new DOMMatrix(getComputedStyle(e).transform).a') > 1.45
+    expect(page.locator('.is-current > span')).to_have_css('transform', 'none')
     assert page.locator('.is-current > span').evaluate('(e)=>getComputedStyle(e).color') == band.evaluate('(e)=>getComputedStyle(e).color')
     page.get_by_role('button', name='前进一页').click()
     expect(band).to_have_attribute('data-row', '15')
@@ -377,7 +405,7 @@ def assert_pagination(page, engine):
     page.get_by_label('跳转页码').fill('2')
     page.get_by_role('button', name='跳转', exact=True).click()
     expect(page.get_by_role('button', name='开始', exact=True)).to_be_visible()
-    page.locator('.line-counter').click()
+    page.locator('.reader-book-name').click()
     page.keyboard.press('ArrowRight')
     expect(band).to_have_attribute('data-page', '3')
     page.keyboard.press('ArrowLeft')
@@ -396,9 +424,20 @@ def assert_pagination(page, engine):
     expect(page.locator('#cursor-words')).to_have_value('50')
     expect(page.locator('#cursor-transparent')).to_be_checked()
     page.locator('#cursor-transparent').uncheck()
-    expect(page.get_by_label('光标颜色', exact=True)).to_be_enabled()
+    expect(page.get_by_label('下划线颜色', exact=True)).to_be_enabled()
+    expect(page.locator('#cursor-thickness')).to_have_value('3')
     page.get_by_role('button', name='完成设置').click()
-    expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgb(213, 226, 180)')
+    expect(page.locator('.scan-cursor')).to_have_css('background-color', 'rgb(123, 146, 89)')
+    pages_before = band.get_attribute('data-pages')
+    for thickness in ['1', '6']:
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        page.locator('#cursor-thickness').fill(thickness)
+        expect(page.locator('.preview-underline')).to_have_css('height', thickness + 'px')
+        page.get_by_role('button', name='完成设置').click()
+        expect(page.locator('.scan-cursor')).to_have_css('height', thickness + 'px')
+        expect(band).to_have_attribute('data-pages', pages_before)
+        assert abs(float(band.get_attribute('data-source')) - source) < 0.0001
+        assert_reader_layout(page)
     for width, height in [(390, 844), (844, 390), (320, 568)]:
         page.set_viewport_size({'width': width, 'height': height})
         page.wait_for_timeout(200)
@@ -437,7 +476,142 @@ def assert_pagination(page, engine):
     expect(page.locator('#cursor-words')).to_have_value('1')
     page.get_by_role('button', name='完成设置').click()
     page.get_by_role('button', name='返回书架').click()
-    print(f'PASS {engine}: 12px/15 lines/50 words, transparent cursor with zoom, page count/jump/bounds, pause/resume, responsive repagination, punctuation-only pages', flush=True)
+    print(f'PASS {engine}: 12px/15 lines/50 words, underline colors/thickness/transparency, no text scaling, compact header/footer, page count/jump/bounds, pause/resume, responsive repagination, punctuation-only pages', flush=True)
+
+
+def sample_trails(page, duration=0):
+    return page.evaluate('''duration => new Promise(resolve=>{
+        const samples=[]; let started;
+        const tick=time=>{
+            started??=time;
+            const band=document.querySelector('.reading-band');
+            const position=Number(band.dataset.position), cell=Number(band.dataset.cellWidth);
+            const rows=[...document.querySelectorAll('.reading-row')].map(row=>{
+                const glyphs=[...row.querySelectorAll('.reading-glyph')];
+                const line=row.querySelector('.reading-trail'), box=line.getBoundingClientRect();
+                const expected=Math.min(glyphs.length,Math.max(0,position-Number(glyphs[0].dataset.word)))*cell;
+                const start=glyphs[0].getBoundingClientRect(), end=glyphs.at(-1).getBoundingClientRect();
+                return {row:Number(row.dataset.row),width:parseFloat(line.style.width),expected,
+                    below:line.hidden||box.top>=glyphs[0].firstElementChild.getBoundingClientRect().bottom+1,
+                    bounded:line.hidden||(box.left>=start.left-1&&box.right<=end.right+1),
+                    height:parseFloat(line.style.height),hidden:line.hidden};
+            });
+            samples.push({time,position,row:Number(band.dataset.row),rows});
+            if(time-started>=duration)resolve(samples);else requestAnimationFrame(tick);
+        };requestAnimationFrame(tick);
+    })''', duration)
+
+
+def assert_trail_modes(page, engine):
+    page.set_viewport_size({'width': 390, 'height': 844})
+    upload(page, '双模式测试.txt', ('甲乙丙丁戊己庚辛壬癸' * 400).encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《双模式测试》', exact=True).click()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='恢复默认').click()
+    expect(page.get_by_role('button', name='指读', exact=True)).to_have_attribute('aria-pressed', 'true')
+    page.get_by_role('button', name='无标点密排', exact=True).click()
+    page.locator('#font-size').fill('28')
+    page.locator('#max-lines').fill('6')
+    page.locator('#cursor-words').fill('5')
+    page.locator('#cursor-thickness').fill('3')
+    page.locator('#reading-speed').fill('600')
+    page.get_by_role('button', name='划线留痕', exact=True).click()
+    expect(page.locator('#cursor-words')).to_be_disabled()
+    page.get_by_role('button', name='完成设置').click()
+    band = page.locator('.reading-band')
+    expect(band).to_have_attribute('data-cursor-mode', 'trail')
+    assert_reader_layout(page)
+    assert all(row['width'] == 0 for row in sample_trails(page)[0]['rows'])
+    page.get_by_role('button', name='开始', exact=True).click()
+    cols = int(band.get_attribute('data-columns'))
+    frames = sample_trails(page, max(3000, cols * 280))
+    page.get_by_role('button', name='停止', exact=True).click()
+    assert frames[-1]['row'] >= frames[0]['row'] + 2
+    assert any(any(row['width'] > 0 for row in frame['rows']) for frame in frames)
+    for frame in frames:
+        assert len(frame['rows']) <= 11
+        for row in frame['rows']:
+            assert abs(row['width'] - row['expected']) < 0.02, (engine, frame)
+            assert row['below'] and row['bounded'] and row['height'] == 3, (engine, frame)
+    (ARTIFACTS / f'{engine}-trail-frames.json').write_text(json.dumps(frames), encoding='utf-8')
+    before = sample_trails(page)[0]
+    page.wait_for_timeout(180)
+    assert sample_trails(page)[0]['rows'] == before['rows']
+    source = band.get_attribute('data-source')
+    page.screenshot(path=str(ARTIFACTS / f'{engine}-trail-mode.png'))
+    page.get_by_role('button', name='返回书架').click()
+    page.reload()
+    page.get_by_role('button', name='继续阅读', exact=True).click()
+    expect(band).to_have_attribute('data-source', source)
+    expect(band).to_have_attribute('data-cursor-mode', 'trail')
+    assert sample_trails(page)[0]['rows'] == before['rows']
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    expect(page.get_by_role('button', name='划线留痕', exact=True)).to_have_attribute('aria-pressed', 'true')
+    page.get_by_role('button', name='指读', exact=True).click()
+    expect(page.locator('#cursor-words')).to_be_enabled()
+    expect(page.locator('#cursor-words')).to_have_value('5')
+    page.get_by_role('button', name='完成设置').click()
+    expect(band).to_have_attribute('data-source', source)
+    expect(page.locator('.reading-trail:not([hidden])')).to_have_count(0)
+    expect(page.locator('.scan-cursor')).to_be_visible()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='划线留痕', exact=True).click()
+    page.get_by_role('button', name='完成设置').click()
+    assert sample_trails(page)[0]['rows'] == before['rows']
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.locator('#cursor-transparent').check()
+    page.get_by_role('button', name='完成设置').click()
+    expect(page.locator('.reading-trail:not([hidden])').first).to_have_css('background-color', 'rgba(0, 0, 0, 0)')
+    assert sample_trails(page)[0]['rows'] == before['rows']
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.locator('#cursor-transparent').uncheck()
+    page.get_by_label('下划线颜色', exact=True).fill('#e5b77b')
+    page.locator('#cursor-thickness').fill('6')
+    page.get_by_role('button', name='完成设置').click()
+    expect(page.locator('.reading-trail:not([hidden])').first).to_have_css('background-color', 'rgb(229, 183, 123)')
+    for width, height in [(844, 390), (320, 568), (390, 844)]:
+        page.set_viewport_size({'width': width, 'height': height})
+        page.wait_for_timeout(220)
+        assert_reader_layout(page)
+        expect(band).to_have_attribute('data-source', source)
+        for row in sample_trails(page)[0]['rows']:
+            assert abs(row['width'] - row['expected']) < 0.02
+            assert row['below'] and row['bounded'] and row['height'] == 6
+    for mode in ['语义段落', '紧凑排列', '无标点密排']:
+        page.get_by_role('button', name='阅读设置', exact=True).click()
+        page.get_by_role('button', name=mode, exact=True).click()
+        page.get_by_role('button', name='完成设置').click()
+        expect(band).to_have_attribute('data-source', source)
+        assert_reader_layout(page)
+    for target in ['30', '2', '1']:
+        page.get_by_label('跳转页码').fill(target)
+        page.get_by_role('button', name='跳转', exact=True).click()
+        expect(band).to_have_attribute('data-page', target)
+        for row in sample_trails(page)[0]['rows']:
+            assert abs(row['width'] - row['expected']) < 0.02
+        assert page.locator('.reading-trail').count() <= 11
+    expect(page.locator('.reading-trail:not([hidden])')).to_have_count(0)
+    page.get_by_role('button', name='返回书架').click()
+    upload(page, '留痕短书.txt', '甲，乙。\n！！'.encode())
+    close_import(page)
+    page.get_by_role('button', name='阅读《留痕短书》', exact=True).click()
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.get_by_role('button', name='语义段落', exact=True).click()
+    page.get_by_role('button', name='完成设置').click()
+    page.get_by_role('button', name='开始', exact=True).click()
+    expect(page.get_by_role('button', name='重新阅读')).to_be_visible()
+    assert page.locator('.reading-trail:not([hidden])').count() == page.locator('.reading-row').count()
+    page.screenshot(path=str(ARTIFACTS / f'{engine}-trail-completed.png'))
+    page.get_by_role('button', name='阅读设置', exact=True).click()
+    page.locator('#reading-speed').fill('30')
+    page.get_by_role('button', name='完成设置').click()
+    page.get_by_role('button', name='重新阅读').click()
+    page.get_by_role('button', name='停止', exact=True).click()
+    assert page.locator('.reading-trail:not([hidden])').count() <= 1
+    assert position(page) < 1
+    page.get_by_role('button', name='返回书架').click()
+    print(f'PASS {engine}: pointer/trail, no return flight, retained per-row ink, rewind/restart/reflow/reload, colors/transparency, bounded buffers', flush=True)
 
 
 def main():
@@ -459,9 +633,7 @@ def main():
             expect(page.locator('.reading-band')).to_have_attribute('data-page', '2')
             page.get_by_role('button', name='后退一页').click()
             expect(page.locator('.reading-band')).to_have_attribute('data-page', '1')
-            page.get_by_role('button', name='进入专注模式').click()
-            assert page.locator('.reader-mode-info').evaluate('(e) => getComputedStyle(e).visibility') == 'hidden'
-            page.get_by_role('button', name='退出专注模式').click()
+            expect(page.locator('.reader-mode-info, .focus-toggle, .reader-footer, .reader-hint')).to_have_count(0)
             page.get_by_role('button', name='返回书架').click()
             for name, data in [('溪边.txt', '溪边第一行。\n溪边第二行。'.encode()), ('竹林.docx', docx_bytes()), ('英文.pdf', pdf_bytes()), ('中文.pdf', pdf_bytes('山中清风，流水静好。', chinese=True))]:
                 upload(page, name, data)
@@ -519,6 +691,7 @@ def main():
             try:
                 assert_guided_reading(page, engine.name)
                 assert_pagination(page, engine.name)
+                assert_trail_modes(page, engine.name)
                 assert not errors, errors
             except Exception:
                 page.screenshot(path=str(ARTIFACTS / f'{engine.name}-failure.png'))

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { defaultSettings, MAX_READING_SPEED, progressOf, splitLines, validateSettings } from './model';
 import { createDocument, glyphPosition, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
-import { buildMotion, focusWeight, motionFrame } from './reading-motion';
+import { buildMotion, motionFrame, trailRange } from './reading-motion';
 import { decodeText, importBook } from './importer';
 import { sampleBooks } from './samples';
 
@@ -31,14 +31,25 @@ describe('阅读设置与进度', () => {
     expect(validateSettings({ speed: 1600, fontSize: 44, pageColor: '#123456' }))
       .toEqual({ ...defaultSettings, fontSize: 44, pageColor: '#123456' });
   });
-  it('字速、行数、倍率和配色有边界校验', () => {
+  it('字速、行数、线宽和配色有边界校验', () => {
     expect(validateSettings({ ...defaultSettings, speed: 1600 }).speed).toBe(1600);
     expect(validateSettings({ ...defaultSettings, speed: -1 }).speed).toBe(30);
-    expect(validateSettings({ ...defaultSettings, fontSize: 0, maxLines: 999, cursorScale: 9, cursorColor: 'url(x)' }))
-      .toMatchObject({ fontSize: 12, maxLines: 15, cursorScale: 2, cursorColor: defaultSettings.cursorColor });
+    expect(validateSettings({ ...defaultSettings, fontSize: 0, maxLines: 999, cursorThickness: 9, cursorColor: 'url(x)' }))
+      .toMatchObject({ fontSize: 12, maxLines: 15, cursorThickness: 6, cursorColor: defaultSettings.cursorColor });
+    for (const [input, output] of [[0, 1], [1, 1], [6, 6], [7, 6], [2.6, 3], [NaN, 2], [Infinity, 2]]) {
+      expect(validateSettings({ cursorThickness: input }).cursorThickness).toBe(output);
+    }
+    const migrated = validateSettings({ version: 2, cursorScale: 2, speed: 600, cursorWords: 50, cursorColor: '#e5b77b', cursorTransparent: true });
+    expect(migrated).toMatchObject({ cursorThickness: 2, speed: 600, cursorWords: 50, cursorColor: '#e5b77b', cursorTransparent: true });
+    expect(migrated).not.toHaveProperty('cursorScale');
     expect(validateSettings({ fontSize: 12, maxLines: 15 })).toMatchObject({ fontSize: 12, maxLines: 15 });
     expect(validateSettings({ cursorTransparent: true }).cursorTransparent).toBe(true);
     for (const value of ['true', 1, null, undefined]) expect(validateSettings({ cursorTransparent: value }).cursorTransparent).toBe(false);
+  });
+  it('默认指读模式，留痕模式可保存，旧配置和非法模式安全回退', () => {
+    expect(defaultSettings.cursorMode).toBe('pointer');
+    for (const cursorMode of [undefined, null, '', 'unknown', true, 1, 'pointer']) expect(validateSettings({ version: 2, cursorMode }).cursorMode).toBe('pointer');
+    expect(validateSettings({ version: 2, cursorMode: 'trail', speed: 600, cursorWords: 50, cursorThickness: 6, cursorTransparent: true })).toMatchObject({ cursorMode: 'trail', speed: 600, cursorWords: 50, cursorThickness: 6, cursorTransparent: true });
   });
   it('窗口字数限制1–50，旧v2设置保留字速并默认有色1字窗口', () => {
     expect(validateSettings({ version: 2, speed: 600 })).toMatchObject({ speed: 600, cursorWords: 1, cursorTransparent: false });
@@ -100,13 +111,13 @@ describe('多行逐字阅读', () => {
     expect(motionFrame(motion, 1.5).scroll).toBeGreaterThan(1);
     expect(motionFrame(motion, 4).progress).toBe(1);
   });
-  it('小屏大字与放大仍保留两行，最大行数限制有效', () => {
-    const metrics = readingMetrics(700, 180, { ...defaultSettings, fontSize: 64, cursorScale: 2, maxLines: 12 });
+  it('小屏大字与粗下划线仍保留两行，最大行数限制有效', () => {
+    const metrics = readingMetrics(700, 180, { ...defaultSettings, fontSize: 64, cursorThickness: 6, maxLines: 12 });
     expect(metrics.visibleLines).toBe(2);
     expect(metrics.fontSize).toBeLessThan(64);
     expect(metrics.lineHeight * metrics.visibleLines).toBeLessThanOrEqual(182);
     expect(readingMetrics(900, 1000, { ...defaultSettings, maxLines: 3 }).visibleLines).toBe(3);
-    const narrow = readingMetrics(272, 600, { ...defaultSettings, fontSize: 64, cursorScale: 2 });
+    const narrow = readingMetrics(272, 600, { ...defaultSettings, fontSize: 64, cursorThickness: 6 });
     expect(narrow.columns * narrow.cellWidth + 32).toBeLessThanOrEqual(272);
   });
 });
@@ -177,43 +188,87 @@ describe('连续滑窗与纯文字时钟', () => {
       expect((at - before) / epsilon).toBeCloseTo((after - at) / epsilon, 3);
     }
   });
-  it('扫读、弧线返回和下行起点位置及速度连续', () => {
-    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸，。', '子丑寅卯辰巳午未申酉戌亥']);
-    for (const span of [1, 5, 10]) {
+  it('换行直接进入下一行字下，无飞行阶段，正文上移速度仍连续', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸，。', '！！！', '子丑寅卯辰巳午未申酉戌亥']);
+    for (const span of [1, 5, 10, 50]) {
       const motion = buildMotion(doc, layoutDocument(doc, 8, 'semantic'), span);
       const epsilon = 0.00001;
-      for (const row of motion.rows.slice(0, -1)) {
-        for (const time of [row.scanEnd, row.end]) {
-          const before = motionFrame(motion, time - epsilon);
-          const at = motionFrame(motion, time);
-          const after = motionFrame(motion, time + epsilon);
-          for (const key of ['x', 'y', 'width', 'scroll'] as const) {
-            expect(Math.abs(at[key] - before[key])).toBeLessThan(0.0001);
-            expect(Math.abs(after[key] - at[key])).toBeLessThan(0.0001);
-            expect((at[key] - before[key]) / epsilon).toBeCloseTo((after[key] - at[key]) / epsilon, 2);
-          }
-        }
+      for (let i = 0; i < motion.rows.length - 1; i++) {
+        const row = motion.rows[i];
+        const next = motion.rows[i + 1];
+        const before = motionFrame(motion, row.end - epsilon);
+        const at = motionFrame(motion, row.end);
+        const after = motionFrame(motion, row.end + epsilon);
+        expect(before.y).toBe(row.rowIndex);
+        expect(before.x).toBeCloseTo(row.left.values.at(-1)!, 3);
+        expect(at).toMatchObject({ y: next.rowIndex, rowIndex: next.rowIndex, x: next.left.values[0], inkX: next.ink.values[0] });
+        expect(after.y).toBe(next.rowIndex);
+        expect((at.scroll - before.scroll) / epsilon).toBeCloseTo((after.scroll - at.scroll) / epsilon, 2);
       }
-      const row = motion.rows[0];
-      const middle = motionFrame(motion, (row.scanEnd + row.end) / 2);
-      expect(middle.turning).toBe(true);
-      expect(middle.y).toBeGreaterThan((row.rowIndex + motion.rows[1].rowIndex) / 2);
+      for (let clock = 0; clock <= motion.total; clock += 0.05) {
+        const frame = motionFrame(motion, clock);
+        expect(frame.y).toBe(frame.rowIndex);
+        expect(Number.isInteger(frame.y)).toBe(true);
+      }
     }
   });
-  it('中心渐进放大，两侧对称衰减，换行前后无缩放跳变', () => {
-    const doc = createDocument(['甲乙丙丁戊己庚辛'.repeat(4)]);
-    const motion = buildMotion(doc, layoutDocument(doc, 8, 'compact'), 5);
-    const frame = motionFrame(motion, 0);
-    expect(focusWeight(2, 0, frame)).toBe(1);
-    expect(focusWeight(1, 0, frame)).toBeGreaterThan(focusWeight(0, 0, frame));
-    expect(focusWeight(1, 0, frame)).toBe(focusWeight(3, 0, frame));
-    expect(focusWeight(7, 0, frame)).toBe(0);
-    for (const time of [motion.rows[0].scanEnd, motion.rows[0].end]) {
-      for (let row = 0; row <= 1; row++) {
-        for (let column = 0; column < 8; column++) {
-          expect(focusWeight(column, row, motionFrame(motion, time - 0.00001)))
-            .toBeCloseTo(focusWeight(column, row, motionFrame(motion, time + 0.00001)), 4);
+  it('等宽纯文字行指读与笔尖都持续匀速前行', () => {
+    const doc = createDocument(['甲乙丙丁戊己庚辛壬癸'.repeat(4)]);
+    const motion = buildMotion(doc, layoutDocument(doc, 20, 'plain'), 5);
+    for (const clock of [0, 2, 10, 18]) {
+      const before = motionFrame(motion, clock);
+      const after = motionFrame(motion, clock + 0.5);
+      expect(after.x - before.x).toBeCloseTo(15 / 20 * 0.5);
+      expect(after.inkX - before.inkX).toBeCloseTo(0.5);
+    }
+  });
+  it('留痕从零逐渐增长，完成行保留，未读行无痕，回退和重读按当前进度重建', () => {
+    const doc = createDocument(['甲乙丙丁'.repeat(4)]);
+    const layout = layoutDocument(doc, 4, 'plain');
+    const motion = buildMotion(doc, layout, 1);
+    const ranges = (time: number) => layout.rows.map((_, i) => trailRange(layout, i, motionFrame(motion, time)).width);
+    expect(ranges(0)).toEqual([0, 0, 0, 0]);
+    expect(ranges(1.5)).toEqual([1.5, 0, 0, 0]);
+    expect(ranges(4)).toEqual([4, 0, 0, 0]);
+    expect(ranges(6.5)).toEqual([4, 2.5, 0, 0]);
+    expect(ranges(16)).toEqual([4, 4, 4, 4]);
+    expect(ranges(2)).toEqual([2, 0, 0, 0]);
+    expect(ranges(0)).toEqual([0, 0, 0, 0]);
+    for (const span of [1, 5, 50]) expect(trailRange(layout, 1, motionFrame(buildMotion(doc, layout, span), 6.5)).width).toBe(2.5);
+  });
+  it('留痕按源进度重排，跨标点和缩进但不连接行间空白', () => {
+    const doc = createDocument(['甲，乙！', '丙，丁。', '！？？']);
+    const source = sourcePosition(doc, 2.5);
+    for (const mode of ['semantic', 'compact', 'plain'] as const) {
+      for (const columns of [3, 12]) {
+        const layout = layoutDocument(doc, columns, mode);
+        const motion = buildMotion(doc, layout, 1);
+        const frame = motionFrame(motion, glyphPosition(doc, source));
+        let previous = 0;
+        for (let clock = 0; clock <= motion.total; clock += 0.1) {
+          const sum = layout.rows.reduce((value, _, i) => value + trailRange(layout, i, motionFrame(motion, clock)).width, 0);
+          expect(sum).toBeGreaterThanOrEqual(previous - 1e-8);
+          previous = sum;
         }
+        layout.rows.forEach((row, i) => {
+          const range = trailRange(layout, i, frame);
+          expect(range.x).toBe(row.columns[0]);
+          expect(range.width).toBeGreaterThanOrEqual(0);
+          expect(range.x + range.width).toBeLessThanOrEqual(row.columns.at(-1)! + 1);
+          if (i > frame.rowIndex) expect(range.width).toBe(0);
+        });
+      }
+    }
+  });
+  it('各字号的1–6px下划线均在字形下面、行内，粗细不改变排版', () => {
+    for (const fontSize of [12, 18, 28, 44, 64]) {
+      const base = readingMetrics(390, 600, { ...defaultSettings, fontSize });
+      for (let cursorThickness = 1; cursorThickness <= 6; cursorThickness++) {
+        const metrics = readingMetrics(390, 600, { ...defaultSettings, fontSize, cursorThickness });
+        expect(metrics).toEqual(base);
+        expect(metrics.underlineOffset).toBeGreaterThan((metrics.lineHeight + metrics.fontSize) / 2);
+        expect(metrics.underlineOffset + cursorThickness).toBeLessThan(metrics.lineHeight);
+        expect(metrics.cellWidth).toBe(Math.ceil(metrics.fontSize * 1.12));
       }
     }
   });
@@ -251,7 +306,7 @@ describe('按实际行数分页', () => {
     expect(pageTarget(layoutDocument(createDocument([]), 10, 'plain'), 6, 1)).toBeNull();
   });
   it('12px可显示15行，空间受限时按实际可见行数分页', () => {
-    const settings = { ...defaultSettings, fontSize: 12, maxLines: 15, cursorScale: 1 };
+    const settings = { ...defaultSettings, fontSize: 12, maxLines: 15, cursorThickness: 1 };
     const tall = readingMetrics(390, 700, settings);
     expect(tall.fontSize).toBe(12);
     expect(tall.visibleLines).toBe(15);

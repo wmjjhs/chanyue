@@ -1,5 +1,5 @@
 // 版权所有：波哥
-import { MIN_FONT_SIZE, type Book, type Settings } from './model';
+import { MAX_CURSOR_THICKNESS, MIN_FONT_SIZE, type Book, type Settings } from './model';
 
 export type ReadingDocument = {
   glyphs: string[]; offsets: number[]; words: number[]; wordOffsets: number[]; wordOrdinal: number[];
@@ -163,12 +163,15 @@ export function pageTarget(layout: ReadingLayout, visibleLines: number, page: nu
 }
 
 export function readingMetrics(width: number, height: number, settings: Settings) {
-  const lineFactor = Math.max(1.9, settings.cursorScale + 0.55);
-  const cellFactor = Math.max(1.12, settings.cursorScale + 0.12);
-  const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(Math.floor(height / 2) / lineFactor, Math.floor((width - 32) / 2) / cellFactor)));
+  const lineFactor = 1.65;
+  const cellFactor = 1.12;
+  const underlineSpace = 2 * (MAX_CURSOR_THICKNESS + 3);
+  const halfHeight = Math.floor(height / 2);
+  const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(halfHeight / lineFactor, halfHeight - underlineSpace, Math.floor((width - 32) / 2) / cellFactor)));
   const cellWidth = Math.ceil(fontSize * cellFactor);
-  const lineHeight = Math.ceil(fontSize * lineFactor);
+  const lineHeight = Math.ceil(Math.max(fontSize * lineFactor, fontSize + underlineSpace));
+  const underlineOffset = (lineHeight + fontSize) / 2 + 2;
   const visibleLines = Math.max(2, Math.min(settings.maxLines, Math.floor(height / lineHeight)));
   const columns = Math.max(2, Math.floor((width - 32) / cellWidth));
-  return { fontSize, cellWidth, lineHeight, visibleLines, columns };
+  return { fontSize, cellWidth, lineHeight, underlineOffset, visibleLines, columns };
 }
