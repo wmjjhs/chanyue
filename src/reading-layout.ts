@@ -1,12 +1,14 @@
 // 版权所有：波哥
 import { MAX_CURSOR_THICKNESS, MIN_FONT_SIZE, type Book, type Settings } from './model';
+import { validateTypography, type TextRun } from './typography';
 
 export type ReadingDocument = {
   glyphs: string[]; offsets: number[]; words: number[]; wordOffsets: number[]; wordOrdinal: number[];
   paragraphStarts: Set<number>; spaces: Set<number>; lineStarts: number[]; length: number;
+  scales: number[]; bold: boolean[]; maxScale: number;
 };
 export type ReadingRow = {
-  start: number; end: number; glyphs: number[]; columns: number[]; paragraph: boolean; wordStart: number; wordEnd: number;
+  start: number; end: number; glyphs: number[]; columns: number[]; widths: number[]; paragraph: boolean; wordStart: number; wordEnd: number;
 };
 export type ReadingLayout = { rows: ReadingRow[]; rowOf: Uint32Array; columns: number };
 
@@ -33,8 +35,10 @@ function* graphemes(text: string): Generator<{ segment: string; index: number }>
   if (carry) yield { segment: carry, index: base };
 }
 
-export function createDocument(lines: string[]): ReadingDocument {
-  const document: ReadingDocument = { glyphs: [], offsets: [], words: [], wordOffsets: [], wordOrdinal: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0 };
+export function createDocument(lines: string[], typography?: TextRun[]): ReadingDocument {
+  const runs = validateTypography(typography, Math.max(0, lines.reduce((total, line) => total + line.length + 1, 0) - 1));
+  let runIndex = 0;
+  const document: ReadingDocument = { glyphs: [], offsets: [], words: [], wordOffsets: [], wordOrdinal: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0, scales: [], bold: [], maxScale: 1 };
   for (const line of lines) {
     document.lineStarts.push(document.length);
     let first = true;
@@ -45,7 +49,13 @@ export function createDocument(lines: string[]): ReadingDocument {
       if (first) document.paragraphStarts.add(position);
       else if (space) document.spaces.add(position);
       document.glyphs.push(segment);
-      document.offsets.push(document.length + index);
+      const source = document.length + index;
+      while (runIndex < runs.length && runs[runIndex].end <= source) runIndex++;
+      const run = runs[runIndex]?.start <= source ? runs[runIndex] : undefined;
+      document.scales.push(run?.scale ?? 1);
+      document.bold.push(run?.bold ?? false);
+      document.maxScale = Math.max(document.maxScale, run?.scale ?? 1);
+      document.offsets.push(source);
       document.wordOrdinal.push(isPunctuation(segment) ? -1 : document.words.length);
       if (!isPunctuation(segment)) {
         document.words.push(position);
@@ -102,7 +112,8 @@ export function layoutDocument(document: ReadingDocument, width: number, mode: S
   const rows: ReadingRow[] = [];
   const rowOf = new Uint32Array(document.glyphs.length);
   let words = 0;
-  const empty = (start: number): ReadingRow => ({ start, end: start, glyphs: [], columns: [], paragraph: false, wordStart: words, wordEnd: words });
+  const widthOf = (glyph: number) => Math.min(columns, document.scales[glyph] * (document.bold[glyph] ? 1.04 : 1));
+  const empty = (start: number): ReadingRow => ({ start, end: start, glyphs: [], columns: [], widths: [], paragraph: false, wordStart: words, wordEnd: words });
   let row = empty(0);
   row.paragraph = true;
   let column = mode === 'semantic' && columns >= 6 ? 2 : 0;
@@ -118,17 +129,20 @@ export function layoutDocument(document: ReadingDocument, width: number, mode: S
     }
     const gap = mode === 'semantic' && document.spaces.has(i) && row.columns.length > 0 ? 1 : 0;
     if (mode === 'semantic' && latin.test(document.glyphs[i]) && (i === 0 || document.spaces.has(i) || !word.test(document.glyphs[i - 1]))) {
-      let end = i + 1;
-      while (end < document.glyphs.length && end - i <= columns && !document.spaces.has(end) && !document.paragraphStarts.has(end) && latin.test(document.glyphs[end])) end++;
-      if (end - i <= columns && column + gap + end - i > columns) finish();
+      let end = i + 1, wordWidth = widthOf(i);
+      while (end < document.glyphs.length && wordWidth <= columns && !document.spaces.has(end) && !document.paragraphStarts.has(end) && latin.test(document.glyphs[end])) wordWidth += widthOf(end++);
+      if (wordWidth <= columns && column + gap + wordWidth > columns) finish();
     }
-    if (column + (row.columns.length ? gap : 0) >= columns) finish();
+    const glyphWidth = widthOf(i);
+    if (column + (row.columns.length ? gap : 0) + glyphWidth > columns + 1e-7) finish();
     if (row.columns.length) column += gap;
-    if (mode === 'semantic' && column === columns - 1 && i + 1 < document.glyphs.length && closing.test(document.glyphs[i + 1]) && !document.paragraphStarts.has(i + 1) && row.columns.length > 0) finish();
+    if (mode === 'semantic' && i + 1 < document.glyphs.length && closing.test(document.glyphs[i + 1]) && !document.paragraphStarts.has(i + 1) && row.columns.length > 0 && column + glyphWidth + widthOf(i + 1) > columns + 1e-7) finish();
     rowOf[i] = rows.length;
     if (!row.glyphs.length) row.start = i;
     row.glyphs.push(i);
-    row.columns.push(column++);
+    row.columns.push(column);
+    row.widths.push(glyphWidth);
+    column += glyphWidth;
     row.end = i + 1;
     if (document.wordOrdinal[i] >= 0) words++;
     row.wordEnd = words;
@@ -162,18 +176,20 @@ export function pageTarget(layout: ReadingLayout, visibleLines: number, page: nu
   return { rowIndex, position: layout.rows[rowIndex].wordStart };
 }
 
-export function readingMetrics(width: number, height: number, settings: Settings) {
+export function readingMetrics(width: number, height: number, settings: Settings, requestedScale = 1) {
+  const maxScale = Number.isFinite(requestedScale) ? Math.max(1, Math.min(2, requestedScale)) : 1;
   const lineFactor = 1.65;
   const cellFactor = 1.12;
   const underlineSpace = 2 * (MAX_CURSOR_THICKNESS + 3);
   const halfHeight = Math.floor(height / 2);
-  const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(halfHeight / lineFactor, halfHeight - underlineSpace, Math.floor((width - 32) / 2) / cellFactor)));
+  const fontSize = Math.min(settings.fontSize, Math.max(MIN_FONT_SIZE, Math.min(halfHeight / lineFactor, halfHeight - underlineSpace, Math.floor((width - 32) / 2) / cellFactor) / maxScale));
+  const maxFontSize = fontSize * maxScale;
   const cellWidth = Math.ceil(fontSize * cellFactor);
-  const minimumLineHeight = Math.ceil(Math.max(fontSize * lineFactor, fontSize + underlineSpace));
+  const minimumLineHeight = Math.ceil(Math.max(maxFontSize * lineFactor, maxFontSize + underlineSpace));
   const visibleLines = Math.max(2, Math.min(settings.maxLines, Math.floor(height / minimumLineHeight)));
   const lineHeight = Math.max(minimumLineHeight, height / visibleLines);
-  const underlineOffset = (lineHeight + fontSize) / 2 + 2;
+  const underlineOffset = (lineHeight + maxFontSize) / 2 + 2;
   const cursorRow = Math.min(settings.cursorRow, visibleLines);
   const columns = Math.max(2, Math.floor((width - 32) / cellWidth));
-  return { fontSize, cellWidth, lineHeight, underlineOffset, visibleLines, cursorRow, columns };
+  return { fontSize, maxFontSize, cellWidth, lineHeight, underlineOffset, visibleLines, cursorRow, columns };
 }

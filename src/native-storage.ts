@@ -1,8 +1,10 @@
 // 版权所有：波哥
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Preferences } from '@capacitor/preferences';
-import { validateSettings, type Book, type Settings } from './model';
+import { textLength, validateSettings, type Book, type Settings } from './model';
+import { validateTypography } from './typography';
 import { sampleBooks } from './samples';
+import { changeNotes, validateNotes, validateContents, type NoteChange } from './reading-tools';
 
 const directory = Directory.Library;
 const root = 'Chanyue/books';
@@ -29,7 +31,7 @@ function parseBook(data: string, id: string): Book {
     book.lines.some(line => typeof line !== 'string') || !Number.isFinite(book.createdAt) || !Number.isInteger(book.cover)) {
     throw new Error('书籍数据已损坏。');
   }
-  return book;
+  return { ...book, typography: validateTypography(book.typography, textLength(book.lines)), contents: validateContents(book.contents, textLength(book.lines)) };
 }
 
 function mergePosition(book: Book, position: Partial<Book>): Book {
@@ -61,7 +63,24 @@ export function loadNativeBooks(): Promise<Book[]> {
       await Preferences.set({ key: initializedKey, value: 'true' });
     }
     const books: Book[] = [];
-    for (const file of (await Filesystem.readdir({ directory, path: root })).files) {
+    const files = (await Filesystem.readdir({ directory, path: root })).files;
+    const names = new Set(files.map(file => file.name));
+    for (const file of files) {
+      const orphan = /^([a-zA-Z0-9-]{1,120})\.notes\.(?:[0-9]{1,15}\.json|tmp)$/.exec(file.name);
+      if (file.type === 'file' && orphan && !names.has(`${orphan[1]}.json`)) {
+        try { await Filesystem.deleteFile({ directory, path: `${root}/${file.name}` }); } catch {}
+      }
+    }
+    try {
+      const { keys } = await Preferences.keys();
+      for (const key of keys) {
+        const orphan = /^chanyue-position:([a-zA-Z0-9-]{1,120})$/.exec(key);
+        if (orphan && !names.has(`${orphan[1]}.json`)) {
+          try { await Preferences.remove({ key }); } catch {}
+        }
+      }
+    } catch {}
+    for (const file of files) {
       if (file.type !== 'file' || !/^[a-zA-Z0-9-]{1,120}\.json$/.test(file.name)) continue;
       const id = file.name.slice(0, -5);
       const { data } = await Filesystem.readFile({ directory, path: pathFor(id), encoding: Encoding.UTF8 });
@@ -86,8 +105,55 @@ export function saveNativePosition({ id, line, offset, character, completed, las
 
 export function deleteNativeBook(id: string) {
   return serial(async () => {
-    await Filesystem.deleteFile({ directory, path: pathFor(id) });
-    await Preferences.remove({ key: positionKey(id) });
+    const path = pathFor(id);
+    const names = new Set((await Filesystem.readdir({ directory, path: root })).files.map(file => file.name));
+    await Filesystem.deleteFile({ directory, path });
+    for (const name of names) if (name === `${id}.notes.tmp` || new RegExp(`^${id}\\.notes\\.[0-9]{1,15}\\.json$`).test(name)) {
+      try { await Filesystem.deleteFile({ directory, path: `${root}/${name}` }); } catch {}
+    }
+    try { await Preferences.remove({ key: positionKey(id) }); } catch {}
+  });
+}
+
+async function readNoteBook(id: string) {
+  const { data } = await Filesystem.readFile({ directory, path: pathFor(id), encoding: Encoding.UTF8 });
+  if (typeof data !== 'string') throw new Error('书籍不可用，请返回书架重试。');
+  return parseBook(data, id);
+}
+async function noteVersions(id: string) {
+  const pattern = new RegExp(`^${id}\\.notes\\.([0-9]{1,15})\\.json$`);
+  return (await Filesystem.readdir({ directory, path: root })).files.flatMap(file => {
+    const match = pattern.exec(file.name);
+    return match ? [{ name: file.name, sequence: Number(match[1]) }] : [];
+  }).sort((a, b) => b.sequence - a.sequence);
+}
+async function readNotes(id: string, text: string) {
+  const versions = await noteVersions(id);
+  if (!versions.length) return [];
+  const { data } = await Filesystem.readFile({ directory, path: `${root}/${versions[0].name}`, encoding: Encoding.UTF8 });
+  if (typeof data !== 'string' || data.length > 1_500_000) throw new Error('笔记无法读取，原记录未修改。');
+  return validateNotes(JSON.parse(data), text);
+}
+export function loadNativeNotes(id: string) {
+  pathFor(id);
+  return serial(async () => { const book = await readNoteBook(id); return readNotes(id, book.lines.join('\n')); });
+}
+export function mutateNativeNotes(id: string, change: NoteChange) {
+  pathFor(id);
+  return serial(async () => {
+    const book = await readNoteBook(id), text = book.lines.join('\n');
+    const notes = changeNotes(await readNotes(id, text), change, text);
+    const versions = await noteVersions(id), sequence = (versions[0]?.sequence ?? 0) + 1;
+    if (sequence >= 1e15) throw new Error('笔记版本异常，原记录未修改。');
+    const from = `${root}/${id}.notes.tmp`, to = `${root}/${id}.notes.${sequence}.json`, encoded = JSON.stringify(notes);
+    await Filesystem.writeFile({ directory, path: from, data: encoded, encoding: Encoding.UTF8 });
+    const check = await Filesystem.readFile({ directory, path: from, encoding: Encoding.UTF8 });
+    if (check.data !== encoded) throw new Error('笔记写入不完整，原记录未修改。');
+    await Filesystem.rename({ directory, from, to });
+    for (const old of versions.slice(1)) {
+      try { await Filesystem.deleteFile({ directory, path: `${root}/${old.name}` }); } catch {}
+    }
+    return notes;
   });
 }
 

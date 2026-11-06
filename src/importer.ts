@@ -1,6 +1,8 @@
 // 版权所有：波哥
-import { strFromU8, unzipSync } from 'fflate';
 import { makeId, splitLines, type Book } from './model';
+import { extractFormattedDocx } from './docx-import';
+import { normalizeFormatted, type FormattedText, type TextPiece } from './typography';
+import { MAX_CONTENTS, validateContents, type ContentsEntry } from './reading-tools';
 
 export const MAX_FILE_SIZE = 20 * 1024 * 1024;
 const MAX_TEXT = 2_000_000;
@@ -13,34 +15,17 @@ export function decodeText(bytes: Uint8Array): string {
 }
 
 export function extractDocx(bytes: Uint8Array): string {
-  if (bytes[0] !== 0x50 || bytes[1] !== 0x4b) throw new Error('这不是有效的 DOCX 文件，请用 Word 重新另存为 .docx。');
-  let expanded = 0;
-  const files = unzipSync(bytes, { filter(file) {
-    expanded += file.originalSize;
-    if (expanded > 80 * 1024 * 1024) throw new Error('Word 解压后的内容过大，请拆分文档后导入。');
-    return file.name === 'word/document.xml';
-  } });
-  const document = files['word/document.xml'];
-  if (!document) throw new Error('找不到 Word 正文，请确认文件为未加密的 .docx。');
-  const xml = strFromU8(document);
-  if (/<!DOCTYPE|<!ENTITY/i.test(xml)) throw new Error('不支持包含外部实体的 Word 文档。');
-  const dom = new DOMParser().parseFromString(xml, 'application/xml');
-  if (dom.getElementsByTagName('parsererror').length) throw new Error('Word 文档已损坏，无法读取正文。');
-  const paragraphs = Array.from(dom.getElementsByTagNameNS('*', 'p'));
-  return paragraphs.map(p => Array.from(p.getElementsByTagNameNS('*', '*'))
-    .filter(node => ['t', 'tab', 'br', 'cr'].includes(node.localName))
-    .map(node => node.localName === 't' ? node.textContent ?? '' : node.localName === 'tab' ? ' ' : '\n')
-    .join('')).join('\n');
+  return extractFormattedDocx(bytes).lines.join('\n');
 }
 
-async function extractPdf(bytes: Uint8Array, onStatus: (status: string) => void): Promise<string> {
+async function extractPdf(bytes: Uint8Array, onStatus: (status: string) => void): Promise<FormattedText> {
   if (new TextDecoder().decode(bytes.subarray(0, 1024)).indexOf('%PDF-') < 0) throw new Error('这不是有效的 PDF 文件。');
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const { default: workerUrl } = await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url');
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   const base = `${import.meta.env.BASE_URL}pdf-assets/`;
   const task = pdfjs.getDocument({
-    data: bytes, useSystemFonts: true,
+    data: bytes, useSystemFonts: true, disableFontFace: true,
     cMapUrl: `${base}cmaps/`, cMapPacked: true,
     standardFontDataUrl: `${base}standard_fonts/`, wasmUrl: `${base}wasm/`,
   });
@@ -49,21 +34,53 @@ async function extractPdf(bytes: Uint8Array, onStatus: (status: string) => void)
   try {
     const pdf = await task.promise;
     if (pdf.numPages > 2000) throw new Error('PDF 超过 2000 页，请拆分后导入。');
-    let text = '';
+    const pieces: TextPiece[] = [];
+    let length = 0;
     for (let n = 1; n <= pdf.numPages; n++) {
       onStatus(`正在读取 PDF · ${n} / ${pdf.numPages} 页`);
       const page = await pdf.getPage(n);
       const content = await page.getTextContent();
+      if (content.items.some(item => 'str' in item && item.str.trim())) pieces.push({ text: '', anchor: `page-${n - 1}` });
+      try { await page.getOperatorList(); } catch { if (timedOut) throw new Error('PDF 解析超时'); }
+      await Promise.all(Object.keys(content.styles).filter(name => !page.commonObjs.has(name)).map(name => new Promise<void>(resolve => {
+        const timeout = setTimeout(resolve, 2000);
+        page.commonObjs.get(name, () => { clearTimeout(timeout); resolve(); });
+      })));
       for (const item of content.items) {
         if (!('str' in item)) continue;
-        text += item.str + (item.hasEOL ? '\n' : ' ');
+        const text = item.str + (item.hasEOL ? '\n' : ' ');
+        const font = page.commonObjs.has(item.fontName) ? page.commonObjs.get(item.fontName) : null;
+        const family = content.styles[item.fontName]?.fontFamily ?? '';
+        const size = Math.hypot(item.transform[2], item.transform[3]) || Math.abs(item.height) || 12;
+        const bold = font?.bold === true || font?.black === true || Number(font?.cssFontInfo?.fontWeight) >= 600 || /bold|black|heavy|semibold/i.test(family);
+        pieces.push({ text, size, bold }); length += text.length;
+        if (length > MAX_TEXT) throw new Error('正文超过 200 万字，请拆分书籍后导入。');
       }
-      text += '\n';
+      pieces.push({ text: '\n' }); length++;
       page.cleanup();
-      if (text.length > MAX_TEXT) throw new Error('正文超过 200 万字，请拆分书籍后导入。');
     }
-    if (!text.trim()) throw new Error('这份 PDF 没有可提取的文字，可能是扫描件。请先使用 OCR 转成文字型 PDF。');
-    return text;
+    const result = normalizeFormatted(pieces);
+    if (!result.lines.length) throw new Error('这份 PDF 没有可提取的文字，可能是扫描件。请先使用 OCR 转成文字型 PDF。');
+    const contents: ContentsEntry[] = [];
+    try {
+      const outline = await pdf.getOutline();
+      const pending = (outline ?? []).slice(0, MAX_CONTENTS).map(item => ({ item, level: 1 })).reverse();
+      let examined = 0;
+      while (pending.length && examined++ < MAX_CONTENTS) {
+        const { item, level } = pending.pop()!;
+        if (level < 9) pending.push(...(item.items ?? []).slice(0, MAX_CONTENTS - examined).map(child => ({ item: child, level: level + 1 })).reverse());
+        if (!item.dest || item.url || item.unsafeUrl) continue;
+        try {
+          const dest = typeof item.dest === 'string' ? await pdf.getDestination(item.dest) : item.dest;
+          if (!Array.isArray(dest) || !dest.length) continue;
+          const index = typeof dest[0] === 'number' ? dest[0] : await pdf.getPageIndex(dest[0]);
+          const source = result.anchors?.[`page-${index}`];
+          if (Number.isInteger(index) && index >= 0 && index < pdf.numPages && source !== undefined) contents.push({ title: item.title, source, level });
+        } catch { if (timedOut) throw new Error('PDF 解析超时'); }
+      }
+    } catch { if (timedOut) throw new Error('PDF 解析超时'); }
+    result.contents = validateContents(contents, result.lines.join('\n').length);
+    return result;
   } catch (error) {
     if (timedOut) throw new Error('PDF 解析超时，请尝试较小的文件。');
     if (error instanceof Error && error.name === 'PasswordException') throw new Error('PDF 已加密，请先解除密码保护后导入。');
@@ -82,20 +99,23 @@ export async function importBook(file: File, onStatus: (status: string) => void)
   if (!['txt', 'docx', 'pdf'].includes(extension ?? '')) throw new Error('请选择 TXT、Word（.docx）或 PDF 文件。');
   onStatus(`正在读取 ${file.name}`);
   const bytes = new Uint8Array(await file.arrayBuffer());
-  let text: string;
+  let formatted: FormattedText;
   try {
-    text = extension === 'txt' ? decodeText(bytes) : extension === 'docx' ? extractDocx(bytes) : await extractPdf(bytes, onStatus);
+    if (extension === 'txt') {
+      const text = decodeText(bytes);
+      if (text.length > MAX_TEXT) throw new Error('正文超过 200 万字，请拆分书籍后导入。');
+      formatted = { lines: splitLines(text), typography: [] };
+    } else formatted = extension === 'docx' ? extractFormattedDocx(bytes) : await extractPdf(bytes, onStatus);
   } catch (error) {
     if (error instanceof Error && /zip|UTF|encoding|invalid pdf/i.test(error.message)) throw new Error('文件格式不正确或内容已损坏，请重新导出后导入。');
     throw error;
   }
-  if (text.length > MAX_TEXT) throw new Error('正文超过 200 万字，请拆分书籍后导入。');
-  const lines = splitLines(text);
+  const { lines, typography } = formatted;
   if (!lines.length) throw new Error('没有找到可阅读的文字，请检查文件内容。');
   return {
     id: makeId(), title: file.name.replace(/\.[^.]+$/, '').slice(0, 150) || '未命名书籍',
     author: '本地导入', format: extension === 'txt' ? 'TXT' : extension === 'docx' ? 'WORD' : 'PDF',
-    lines, line: 0, offset: null, character: 0, paragraphsPreserved: true, completed: false,
+    lines, typography, contents: formatted.contents ?? [], typographyVersion: 1, line: 0, offset: null, character: 0, paragraphsPreserved: true, completed: false,
     createdAt: Date.now(), lastReadAt: 0, cover: Math.floor(Math.random() * 6),
   };
 }

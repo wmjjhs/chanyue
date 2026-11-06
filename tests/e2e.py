@@ -414,7 +414,7 @@ def assert_pagination(page, engine):
     page.get_by_label('跳转页码').fill('2')
     page.get_by_role('button', name='跳转', exact=True).click()
     expect(page.get_by_role('button', name='开始', exact=True)).to_be_visible()
-    page.locator('.reader-book-name').click()
+    page.evaluate('document.activeElement?.blur()')
     page.keyboard.press('ArrowRight')
     expect(band).to_have_attribute('data-page', '3')
     page.keyboard.press('ArrowLeft')

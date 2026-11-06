@@ -2,24 +2,29 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as NativeApp } from '@capacitor/app';
-import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, RotateCcw, CornerDownLeft } from 'lucide-react';
+import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, RotateCcw, CornerDownLeft, ChevronDown, ArrowUpLeft } from 'lucide-react';
 import { fonts, readableInk, type Book, type Settings } from './model';
 import { createDocument, floorIndex, initialPosition, layoutDocument, pagination, pageTarget, readingMetrics, rowAtSource, sourcePosition } from './reading-layout';
 import { buildMotion, motionFrame } from './reading-motion';
 import { ReadingRenderer } from './reading-renderer';
 import { ambientAudio } from './ambient-audio';
+import { ReadingTools, type ReadingToolsView } from './ReadingTools';
+import { glyphPosition } from './reading-layout';
 
 export type ReadingPosition = Pick<Book, 'line' | 'offset' | 'character' | 'completed'>;
 type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: () => void; onProgress: (position: ReadingPosition) => void; blocked: boolean };
 
 export default function Reader({ book, settings, onBack, onSettings, onProgress, blocked }: Props) {
-  const documentModel = useMemo(() => createDocument(book.lines), [book.lines]);
+  const documentModel = useMemo(() => createDocument(book.lines, book.typography), [book.lines, book.typography]);
   const position = useRef(initialPosition(book, documentModel));
   const manualSource = useRef<number | null>(!book.completed && typeof book.character === 'number' && documentModel.wordOrdinal[floorIndex(documentModel.offsets, book.character)] < 0 ? book.character : null);
   const pageInput = useRef<HTMLInputElement>(null);
   const pageLabel = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
+  const [toolsSource, setToolsSource] = useState<number | null>(null);
+  const [toolsView, setToolsView] = useState<ReadingToolsView>({ tab: book.contents?.length ? 'contents' : 'search', query: '', hit: null });
+  const [returnPoint, setReturnPoint] = useState<{ source: number; completed: boolean } | null>(null);
   const [bounds, setBounds] = useState({ width: 320, height: 320 });
   const space = useRef<HTMLDivElement>(null);
   const band = useRef<HTMLDivElement>(null);
@@ -31,7 +36,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const progressLabel = useRef<HTMLSpanElement>(null);
   const progressFill = useRef<HTMLElement>(null);
   const renderer = useRef<ReadingRenderer | null>(null);
-  const metrics = useMemo(() => readingMetrics(bounds.width, bounds.height, settings), [bounds, settings]);
+  const metrics = useMemo(() => readingMetrics(bounds.width, bounds.height, settings, documentModel.maxScale), [bounds, settings, documentModel.maxScale]);
   const layout = useMemo(() => layoutDocument(documentModel, metrics.columns, settings.layoutMode), [documentModel, metrics.columns, settings.layoutMode]);
   const motion = useMemo(() => buildMotion(documentModel, layout, settings.cursorWords), [documentModel, layout, settings.cursorWords]);
   const latest = useRef({ onProgress, documentModel, layout, metrics, motion, settings });
@@ -52,6 +57,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     const character = manualSource.current ?? sourcePosition(doc, position.current);
     save({ character, line: floorIndex(doc.lineStarts, character), offset: null, completed: doc.words.length > 0 && position.current >= doc.words.length && manualSource.current === null });
   }, []);
+  const currentSource = () => manualSource.current ?? sourcePosition(latest.current.documentModel, position.current);
   const currentRow = useCallback(() => {
     const { documentModel: doc, layout: lines, motion: path } = latest.current;
     if (manualSource.current !== null) return rowAtSource(doc, lines, manualSource.current);
@@ -147,6 +153,24 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const seek = useCallback((next: number, source: number | null = null) => {
     setRunning(false); position.current = next; manualSource.current = source; persist(); paint();
   }, [persist, paint, setRunning]);
+  const openTools = () => {
+    pause();
+    setToolsSource(currentSource());
+  };
+  const jumpFromTools = (source: number) => {
+    const doc = latest.current.documentModel;
+    if (!Number.isFinite(source) || source < 0 || source > doc.length) return;
+    const origin = { source: currentSource(), completed: position.current >= doc.words.length && manualSource.current === null };
+    setReturnPoint(value => value ?? origin);
+    seek(glyphPosition(doc, source), source);
+    setToolsSource(null);
+  };
+  const returnFromTools = () => {
+    if (!returnPoint) return;
+    const doc = latest.current.documentModel;
+    seek(returnPoint.completed ? doc.words.length : glyphPosition(doc, returnPoint.source), returnPoint.completed ? null : returnPoint.source);
+    setReturnPoint(null); setToolsSource(null);
+  };
   const toggle = useCallback(() => {
     if (!latest.current.documentModel.words.length) return;
     if (playingRef.current) { pause(); return; }
@@ -170,21 +194,21 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   }, [goToPage, currentRow]);
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (blocked || event.altKey || event.ctrlKey || event.metaKey || (event.target instanceof HTMLElement && event.target.closest('input,button,select,textarea,[contenteditable=true]'))) return;
+      if (blocked || toolsSource !== null || event.altKey || event.ctrlKey || event.metaKey || (event.target instanceof HTMLElement && event.target.closest('input,button,select,textarea,[contenteditable=true]'))) return;
       if (event.code === 'Space') { event.preventDefault(); toggle(); }
       if (event.key === 'ArrowLeft') { event.preventDefault(); step(-1); }
       if (event.key === 'ArrowRight') { event.preventDefault(); step(1); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [blocked, toggle, step]);
+  }, [blocked, toolsSource, toggle, step]);
 
   const ink = readableInk(settings.pageColor);
   const width = metrics.columns * metrics.cellWidth;
   return <div className="reader reader-v2" style={{ background: settings.pageColor, color: ink, '--reader-ink': ink, '--reader-button-text': settings.pageColor, '--cursor-color': settings.cursorTransparent ? 'transparent' : settings.cursorColor } as CSSProperties}>
     <header className="reader-header">
       <button className="reader-back" aria-label="返回书架" title="返回书架" onClick={() => { pause(); onBack(); }}><ArrowLeft size={20} /></button>
-      <div className="reader-book-name"><strong title={book.title}>{book.title}</strong></div>
+      <div className="reader-book-name reader-tools-entry"><button className="reader-title-button" aria-label="目录、搜索与书签" title="目录、搜索与书签" aria-haspopup="dialog" onClick={openTools}><strong>{book.title}</strong><ChevronDown size={14} /></button>{returnPoint && <button className="reader-return" aria-label="返回刚才的阅读位置" title="返回刚才的阅读位置" onClick={returnFromTools}><ArrowUpLeft size={16} /></button>}</div>
       <button className="icon-button reader-settings" aria-label="阅读设置" title="阅读设置" onClick={() => { pause(); onSettings(); }}><SlidersHorizontal size={20} /></button>
     </header>
     <main className="reading-workspace" ref={space}>
@@ -214,5 +238,6 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       </form>
       <div className="reader-progress" aria-hidden="true"><i ref={progressFill} /></div>
     </div>
+    {toolsSource !== null && <ReadingTools book={book} source={toolsSource} view={toolsView} onViewChange={change => setToolsView(value => ({ ...value, ...change }))} onClose={() => setToolsSource(null)} onJump={jumpFromTools} canReturn={returnPoint !== null} onReturn={returnFromTools} />}
   </div>;
 }

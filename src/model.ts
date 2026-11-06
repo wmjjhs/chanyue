@@ -1,4 +1,6 @@
 // 版权所有：波哥
+import type { TextRun } from './typography';
+import type { ContentsEntry } from './reading-tools';
 export type BookFormat = 'TXT' | 'WORD' | 'PDF';
 export type Book = {
   id: string;
@@ -10,6 +12,9 @@ export type Book = {
   offset: number | null;
   character?: number;
   paragraphsPreserved?: boolean;
+  typography?: TextRun[];
+  typographyVersion?: 1;
+  contents?: ContentsEntry[];
   completed: boolean;
   createdAt: number;
   lastReadAt: number;
@@ -123,6 +128,14 @@ export function textLength(lines: string[]): number {
     lengths.set(lines, length);
   }
   return length;
+}
+
+export function updateImportedTypography(current: Book, incoming: Book): Book | null {
+  if (current.lines.length !== incoming.lines.length || current.lines.some((line, index) => line !== incoming.lines[index])) return null;
+  const typographyChanged = !!incoming.typography?.length && JSON.stringify(current.typography ?? []) !== JSON.stringify(incoming.typography);
+  const contentsChanged = !!incoming.contents?.length && JSON.stringify(current.contents ?? []) !== JSON.stringify(incoming.contents);
+  if (!typographyChanged && !contentsChanged) return null;
+  return { ...current, ...(typographyChanged ? { typography: incoming.typography, typographyVersion: 1 as const } : {}), ...(contentsChanged ? { contents: incoming.contents } : {}) };
 }
 
 export function progressOf(book: Book): number {

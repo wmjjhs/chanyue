@@ -34,6 +34,11 @@ export class ReadingRenderer {
       span.dataset.source = String(this.document.offsets[glyph]);
       span.dataset.word = String(this.document.wordOrdinal[glyph]);
       span.style.left = `${row.columns[index] * this.metrics.cellWidth}px`;
+      span.style.width = `${row.widths[index] * this.metrics.cellWidth}px`;
+      span.style.fontSize = `${this.metrics.fontSize * this.document.scales[glyph]}px`;
+      span.style.fontWeight = this.document.bold[glyph] ? '700' : '400';
+      span.style.alignItems = 'flex-end';
+      span.style.paddingBottom = `${(this.metrics.lineHeight - this.metrics.maxFontSize) / 2}px`;
       inner.textContent = this.document.glyphs[glyph];
       span.append(inner);
       return { element: span, glyph, column: row.columns[index] };
@@ -82,7 +87,8 @@ export class ReadingRenderer {
       for (const cell of row.cells) {
         if (rowIndex === frame.rowIndex && this.document.wordOrdinal[cell.glyph] >= 0) {
           const pen = this.settings.cursorMode === 'trail' ? frame.inkX : frame.x + frame.width / 2;
-          const distance = Math.abs(cell.column + 0.5 - pen);
+          const width = this.document.scales[cell.glyph] * (this.document.bold[cell.glyph] ? 1.04 : 1);
+          const distance = Math.abs(cell.column + Math.min(this.layout.columns, width) / 2 - pen);
           if (distance < nearestDistance) { nearestDistance = distance; nearest = cell.element; }
         }
       }

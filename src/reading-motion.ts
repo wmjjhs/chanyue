@@ -48,10 +48,12 @@ export function buildMotion(document: ReadingDocument, layout: ReadingLayout, re
     const span = Math.min(wordColumns.length, Math.max(1, Math.min(MAX_CURSOR_WORDS, Math.round(requestedSpan))));
     const times = Array.from({ length: wordColumns.length - span + 1 }, (_, i) => i);
     const left = times.map(i => wordColumns[i]);
-    const right = times.map(i => wordColumns[i + span - 1] + 1);
+    const wordWidths = row.glyphs.flatMap((glyph, i) => document.wordOrdinal[glyph] >= 0 ? [row.widths[i]] : []);
+    const right = times.map(i => wordColumns[i + span - 1] + wordWidths[i + span - 1]);
     left[0] = row.columns[0];
-    right[right.length - 1] = row.columns[row.columns.length - 1] + 1;
-    const ink = [row.columns[0], ...wordColumns.slice(1), row.columns[row.columns.length - 1] + 1];
+    const rowEnd = row.columns[row.columns.length - 1] + row.widths[row.widths.length - 1];
+    right[right.length - 1] = rowEnd;
+    const ink = [row.columns[0], ...wordColumns.slice(1), rowEnd];
     rows.push({ rowIndex, start: row.wordStart, end: row.wordEnd, span,
       left: monotoneCurve(times, left), right: monotoneCurve(times, right),
       ink: monotoneCurve(ink.map((_, i) => i), ink) });
@@ -79,7 +81,7 @@ export function trailRange(layout: ReadingLayout, rowIndex: number, frame: Retur
   const row = layout.rows[rowIndex];
   if (!row) return { x: 0, width: 0 };
   const start = row.columns[0];
-  const end = row.columns[row.columns.length - 1] + 1;
+  const end = row.columns[row.columns.length - 1] + row.widths[row.widths.length - 1];
   const pen = frame.completed || rowIndex < frame.rowIndex ? end : rowIndex === frame.rowIndex && frame.span > 0 ? frame.inkX : start;
   return { x: start, width: Math.max(0, Math.min(end, pen) - start) };
 }

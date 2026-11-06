@@ -4,7 +4,7 @@ import { BookOpen, Library, SlidersHorizontal, CircleHelp, Plus, ArrowUpRight, A
 import { Brand, BookCover, Modal, SettingsPanel, Guide } from './components';
 import Reader, { type ReadingPosition } from './Reader';
 import { importBook } from './importer';
-import { defaultSettings, progressOf, textLength, type Book, type Settings } from './model';
+import { defaultSettings, progressOf, textLength, updateImportedTypography, type Book, type Settings } from './model';
 import { loadBooks, loadSettings, saveSettings, saveBook, savePosition, deleteBook } from './storage';
 
 export default function App() {
@@ -25,7 +25,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const importLock = useRef(false);
   const [importStatus, setImportStatus] = useState('');
-  const [importResults, setImportResults] = useState<{ name: string; error?: string }[]>([]);
+  const [importResults, setImportResults] = useState<{ name: string; error?: string; message?: string }[]>([]);
   const [dragging, setDragging] = useState(false);
   const [toast, setToast] = useState('');
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,12 +83,13 @@ export default function App() {
       for (const file of files) {
         try {
           const book = await importBook(file, setImportStatus);
-          const exists = booksRef.current.some(current => current.lines.length === book.lines.length && current.lines.every((line, i) => line === book.lines[i]));
-          if (exists) throw new Error('相同内容的书籍已在书架中，无需重复导入。');
-          await saveBook(book);
-          replaceBooks([...booksRef.current, book]);
+          const existing = booksRef.current.find(current => current.lines.length === book.lines.length && current.lines.every((line, i) => line === book.lines[i]));
+          const updated = existing ? updateImportedTypography(existing, book) : null;
+          if (existing && !updated) throw new Error('相同内容的书籍已在书架中，无需重复导入。');
+          await saveBook(updated ?? book);
+          replaceBooks(updated ? booksRef.current.map(current => current.id === updated.id ? updated : current) : [...booksRef.current, book]);
           succeeded++;
-          setImportResults(previous => [...previous, { name: file.name }]);
+          setImportResults(previous => [...previous, { name: file.name, message: updated ? '已更新原书格式或目录，阅读进度保持不变' : undefined }]);
         } catch (error) {
           const message = error instanceof Error ? error.message : '无法读取该文件，请重新导出后重试。';
           setImportResults(previous => [...previous, { name: file.name, error: /quota/i.test(message) ? '本机存储空间不足，请删除不需要的书籍后重试。' : message }]);
@@ -99,7 +100,7 @@ export default function App() {
       setBusy(false);
       setImportStatus('');
       if (fileInput.current) fileInput.current.value = '';
-      if (succeeded) notify(`已将 ${succeeded} 本书放入书架`);
+      if (succeeded) notify(`已完成 ${succeeded} 本书的导入或格式更新`);
     }
   };
 
@@ -181,9 +182,9 @@ export default function App() {
         <strong>{busy ? importStatus : '点击选择，或将书籍拖到这里'}</strong><p>{busy ? '正在本地解析，请稍候…' : '支持一次导入多本书籍'}</p>
         <span className="file-formats"><span><FileText size={13} />TXT</span><span><FileText size={13} />Word .docx</span><span><FileText size={13} />PDF</span></span>
       </button>
-      <div className="import-limits"><span>每本 ≤ 20 MB</span><span>每次最多 10 本</span><span>仅提取文字</span></div>
-      <p className="field-note">Word 仅支持 .docx，旧版 .doc 请先转换。扫描版 PDF 请先使用 OCR 识别文字。</p>
-      {importResults.length > 0 && <ul className="import-results" aria-live="polite">{importResults.map((result, index) => <li key={index} className={result.error ? 'error' : 'success'}>{result.error ? <CircleHelp size={18} /> : <CheckCircle2 size={18} />}<div><strong>{result.name}</strong><p>{result.error ?? '已加入书架，随时开始阅读'}</p></div></li>)}</ul>}
+      <div className="import-limits"><span>每本 ≤ 20 MB</span><span>每次最多 10 本</span><span>保留字号与加粗</span></div>
+      <p className="field-note">Word .docx 保留字号层级与加粗；PDF 尽量保留可识别字体，扫描件需先 OCR。字号随阅读设置整体调整，不复刻原页版式。旧书请重新导入原文件：正文完全相同时补充格式或目录并保留进度与书签。阅读时点击顶部书名，即可打开目录、搜索和书签摘录。</p>
+      {importResults.length > 0 && <ul className="import-results" aria-live="polite">{importResults.map((result, index) => <li key={index} className={result.error ? 'error' : 'success'}>{result.error ? <CircleHelp size={18} /> : <CheckCircle2 size={18} />}<div><strong>{result.name}</strong><p>{result.error ?? result.message ?? '已加入书架，随时开始阅读'}</p></div></li>)}</ul>}
       <div className="notice"><ShieldCheck size={18} /><span>文件只在你的设备上处理，不会被上传。请保留原始文件作为备份。</span></div>
       <button className="primary-button full-width" disabled={busy} onClick={() => setPanel(null)}>{busy ? '正在导入…' : importResults.some(result => !result.error) ? '回书架，开始阅读' : '完成'}</button>
     </Modal>}
@@ -197,7 +198,7 @@ export default function App() {
       }}><label className="input-label" htmlFor="rename-book">书籍名称</label><input className="text-input" id="rename-book" value={newTitle} onChange={event => setNewTitle(event.target.value)} required maxLength={150} />
         <button className="primary-button full-width" type="submit" disabled={managing || !newTitle.trim()}><Pencil size={16} />保存书名</button>
       </form>
-      <div className="delete-area">{confirmDelete ? <><p>确定移除《{managed.title}》？本地书籍与阅读进度将被删除，原始文件不受影响。</p><div><button className="text-button" disabled={managing} onClick={() => setConfirmDelete(false)}>再想想</button><button className="danger-button" disabled={managing} onClick={async () => {
+      <div className="delete-area">{confirmDelete ? <><p>确定移除《{managed.title}》？本地书籍、阅读进度、书签与摘录将被删除，原始文件不受影响。</p><div><button className="text-button" disabled={managing} onClick={() => setConfirmDelete(false)}>再想想</button><button className="danger-button" disabled={managing} onClick={async () => {
         setManaging(true);
         try { await deleteBook(managed.id); replaceBooks(booksRef.current.filter(book => book.id !== managed.id)); setManageId(null); notify('已从书架移除'); }
         catch { notify('移除失败，请稍后重试。'); } finally { setManaging(false); }
