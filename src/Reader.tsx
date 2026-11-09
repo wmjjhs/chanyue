@@ -1,5 +1,5 @@
 // 版权所有：波哥
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { App as NativeApp } from '@capacitor/app';
 import { ArrowLeft, Play, Pause, SkipBack, SkipForward, SlidersHorizontal, RotateCcw, CornerDownLeft, ChevronDown, ArrowUpLeft } from 'lucide-react';
@@ -14,6 +14,8 @@ import { splitSentences, sentenceIndex, sentenceStop, advanceSentence } from './
 import { RecitationPanel } from './RecitationPanel';
 import { fixedPracticeUnits } from './practice-layout';
 import { preferencesFor, type BookState, type ReadingPreference } from './book-state';
+import { SentenceListening } from './listening';
+import { createSystemSpeech } from './system-speech';
 
 export type ReadingPosition = Pick<Book, 'line' | 'offset' | 'character' | 'completed'>;
 type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: () => void; onProgress: (position: ReadingPosition) => void; blocked: boolean; onBookState: (state: BookState) => Promise<void> };
@@ -22,6 +24,11 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const documentModel = useMemo(() => createDocument(book.lines, book.typography), [book.lines, book.typography]);
   const sentences = useMemo(() => splitSentences(book.lines.join('\n')), [book.lines]);
   const sentenceTarget = useRef<number | null>(null);
+  const listening = book.readingPreference?.mode === 'listening';
+  const listeningRef = useRef(listening); listeningRef.current = listening;
+  const saveListening = useRef(onBookState); saveListening.current = onBookState;
+  const [speech] = useState(() => new SentenceListening(book.lines.join('\n'), createSystemSpeech(), book.listening ?? { source: sentences[Math.max(0, sentenceIndex(sentences, book.character ?? 0))]?.start ?? 0, completed: false, rate: 1 }, state => saveListening.current({ listening: state })));
+  const speechState = useSyncExternalStore(speech.subscribe, speech.getSnapshot);
   const [practiceSource, setPracticeSource] = useState<number | null>(() => book.readingPreference?.mode === 'practice' ? book.practice?.source ?? sourcePosition(documentModel, initialPosition(book, documentModel)) : null);
   const [focused, setFocused] = useState(false);
   const revealControl = useRef<HTMLButtonElement>(null), titleControl = useRef<HTMLButtonElement>(null);
@@ -54,18 +61,19 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const latest = useRef({ onProgress, documentModel, layout, metrics, motion, settings, sentences });
   latest.current = { onProgress, documentModel, layout, metrics, motion, settings, sentences };
   const hasWords = documentModel.words.length > 0;
-  const completed = hasWords && position.current >= documentModel.words.length && manualSource.current === null;
+  const completed = listening ? speechState.completed : hasWords && position.current >= documentModel.words.length && manualSource.current === null;
   const pageCount = pagination(layout.rows.length, metrics.visibleLines, 0).total;
 
   const setRunning = useCallback((value: boolean) => {
     playingRef.current = value; setPlaying(value);
-    ambientAudio.configure(latest.current.settings, value);
+    if (listeningRef.current) ambientAudio.stopSession(true);
+    else ambientAudio.configure(latest.current.settings, value);
   }, []);
-  useEffect(() => { ambientAudio.configure(settings, playingRef.current); }, [settings]);
-  useEffect(() => () => { ambientAudio.stopSession(); }, []);
+  useEffect(() => { if (listening) ambientAudio.stopSession(true); else ambientAudio.configure(settings, playingRef.current); }, [settings, listening]);
+  useEffect(() => () => { speech.pause(); ambientAudio.stopSession(); }, [speech]);
   const persist = useCallback(() => {
     const { documentModel: doc, onProgress: save } = latest.current;
-    if (!doc.glyphs.length) return;
+    if (!doc.glyphs.length || listeningRef.current) return;
     const character = manualSource.current ?? sourcePosition(doc, position.current);
     save({ character, line: floorIndex(doc.lineStarts, character), offset: null, completed: doc.words.length > 0 && position.current >= doc.words.length && manualSource.current === null });
   }, []);
@@ -87,7 +95,8 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     }
     if (manualSource.current !== null) frame.completed = false;
     const pages = pagination(lines.rows.length, m.visibleLines, rowIndex);
-    renderer.current?.paint(frame);
+    const spoken = speech.getSnapshot();
+    renderer.current?.paint(frame, listeningRef.current && !spoken.completed ? latest.current.sentences[sentenceIndex(latest.current.sentences, spoken.source)] : undefined);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
     if (band.current) {
       band.current.dataset.position = String(position.current);
@@ -107,8 +116,8 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (pageLabel.current && pageLabel.current.textContent !== pageText) pageLabel.current.textContent = pageText;
     if (pageInput.current) pageInput.current.placeholder = String(pages.current || 1);
     const sentence = sentenceIndex(latest.current.sentences, manualSource.current ?? sourcePosition(doc, position.current));
-    if (previousButton.current) previousButton.current.disabled = latest.current.settings.sentenceMode ? sentence < 0 || (sentence === 0 && position.current === 0) : pages.current <= 1;
-    if (nextButton.current) nextButton.current.disabled = latest.current.settings.sentenceMode ? sentence < 0 || sentence >= latest.current.sentences.length - 1 : pages.current >= pages.total;
+    if (previousButton.current) previousButton.current.disabled = (listeningRef.current || latest.current.settings.sentenceMode) ? sentence < 0 || (sentence === 0 && position.current === 0) : pages.current <= 1;
+    if (nextButton.current) nextButton.current.disabled = (listeningRef.current || latest.current.settings.sentenceMode) ? sentence < 0 || sentence >= latest.current.sentences.length - 1 : pages.current >= pages.total;
     const percent = `${Math.floor(frame.progress * 100)}% 已读`;
     if (progressLabel.current && progressLabel.current.textContent !== percent) progressLabel.current.textContent = percent;
     if (progressFill.current) progressFill.current.style.width = `${frame.progress * 100}%`;
@@ -130,8 +139,15 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   }, [documentModel, layout, metrics, settings, paint]);
   useLayoutEffect(() => { paint(); });
 
+  useLayoutEffect(() => {
+    if (!listening) return;
+    position.current = speechState.completed ? documentModel.words.length : glyphPosition(documentModel, speechState.focus);
+    manualSource.current = speechState.completed ? null : speechState.focus;
+    setRunning(speechState.active); paint();
+  }, [listening, speechState, documentModel, paint, setRunning]);
+
   useEffect(() => {
-    if (!playing || blocked) return;
+    if (!playing || blocked || listening) return;
     let animation = 0;
     let last: number | null = null;
     let saved = 0;
@@ -147,9 +163,9 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     };
     animation = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animation);
-  }, [playing, blocked, settings.speed, documentModel, paint, persist, setRunning]);
+  }, [playing, blocked, listening, settings.speed, documentModel, paint, persist, setRunning]);
 
-  const pause = useCallback(() => { setRunning(false); persist(); }, [persist, setRunning]);
+  const pause = useCallback(() => { if (listeningRef.current) speech.pause(); setRunning(false); persist(); }, [persist, setRunning, speech]);
   useEffect(() => { if (blocked) pause(); }, [blocked, pause]);
   useLayoutEffect(() => {
     const back = (event: Event) => {
@@ -174,8 +190,9 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   }, [pause]);
 
   const seek = useCallback((next: number, source: number | null = null) => {
+    if (listeningRef.current) { void speech.seek(source ?? sourcePosition(latest.current.documentModel, next)).catch(() => {}); return; }
     setRunning(false); position.current = next; manualSource.current = source; persist(); paint();
-  }, [persist, paint, setRunning]);
+  }, [persist, paint, setRunning, speech]);
   const openTools = () => {
     resumeAfterTools.current = playingRef.current;
     pause();
@@ -190,9 +207,14 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       const units = fixedPracticeUnits(book.lines.join('\n'), 'paragraph');
       change.practice = { source: units[Math.max(0, sentenceIndex(units, currentSource()))]?.start ?? 0, span: 1, mask: 'full', unit: 'paragraph' };
     }
+    if (mode === 'listening' && !book.listening) await speech.seek(currentSource());
     await onBookState(change);
+    if (listening && mode !== 'listening') {
+      position.current = initialPosition(book, documentModel);
+      manualSource.current = !book.completed && typeof book.character === 'number' ? book.character : null;
+    }
     if (mode === 'practice') setPracticeSource(currentSource());
-    setToolsSource(null);
+    setReturnPoint(null); setToolsSource(null);
   };
   const jumpFromTools = (source: number) => {
     const doc = latest.current.documentModel;
@@ -210,6 +232,11 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   };
   const toggle = useCallback(() => {
     if (!latest.current.documentModel.words.length) return;
+    if (listeningRef.current) {
+      if (speech.getSnapshot().active) speech.pause();
+      else { ambientAudio.stopSession(true); void speech.start(); }
+      return;
+    }
     if (playingRef.current) { pause(); return; }
     if (position.current >= latest.current.documentModel.words.length && manualSource.current === null) seek(0);
     const { documentModel: doc, sentences, settings: preferences } = latest.current;
@@ -226,6 +253,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (pageInput.current) pageInput.current.value = '';
   }, [seek]);
   const step = useCallback((direction: number) => {
+    if (listeningRef.current) { speech.step(direction); return; }
     const { layout: lines, metrics: m, documentModel: doc, sentences, settings: preferences } = latest.current;
     if (preferences.sentenceMode) {
       const index = sentenceIndex(sentences, manualSource.current ?? sourcePosition(doc, position.current));
@@ -259,6 +287,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       <button className="icon-button reader-settings" aria-label="阅读设置" title="阅读设置" onClick={() => { pause(); onSettings(); }}><SlidersHorizontal size={20} /></button>
     </header>
     {focused && <button ref={revealControl} className="focus-restore" aria-label="显示操作区" title="显示操作区（Esc）" onClick={revealControls}><SlidersHorizontal size={19} /><span className="sr-only">显示操作区</span></button>}
+    {listening && speechState.error && <div className="listening-error" role="alert">{speechState.error}<button onClick={() => { revealControls(); void speech.start(); }}>重试听书</button></div>}
     <main className="reading-workspace" onClick={event => { if (focused && event.target instanceof Element && !event.target.closest('.flowing-text,.scan-cursor') && !window.getSelection()?.toString()) revealControls(); }} ref={space} style={practiceSource !== null ? { visibility: 'hidden' } : undefined} aria-hidden={practiceSource !== null}>
       <div className="reading-band multiline-band" ref={band} data-testid="reading-band" data-max-lines={settings.maxLines} data-visible-lines={metrics.visibleLines} data-line-height={metrics.lineHeight} data-cell-width={metrics.cellWidth} data-columns={metrics.columns} data-mode={settings.layoutMode} data-cursor-words={settings.cursorWords} data-cursor-mode={settings.cursorMode} data-cursor-row={metrics.cursorRow} data-requested-cursor-row={settings.cursorRow} data-underline-offset={metrics.underlineOffset}
         style={{ width: width + 32, height: '100%', background: settings.lineColor, color: settings.textColor, fontSize: metrics.fontSize, fontFamily: fonts[settings.font], '--cell-width': `${metrics.cellWidth}px`, '--line-height': `${metrics.lineHeight}px` } as CSSProperties}>
@@ -270,7 +299,8 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     </main>
     <div className="reading-under v2-controls" hidden={focused}>
       <div className="line-counter sr-only" ref={counter} aria-live={playing ? 'off' : 'polite'} />
-      <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label={settings.sentenceMode ? '回退一句' : '后退一页'} onClick={() => step(-1)}><SkipBack size={21} /><span>{settings.sentenceMode ? '回退一句' : '后退一页'}</span></button><button className="play-button" disabled={!hasWords} aria-label={playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label={settings.sentenceMode ? '前进一句' : '前进一页'} onClick={() => step(1)}><SkipForward size={21} /><span>{settings.sentenceMode ? '前进一句' : '前进一页'}</span></button></div>
+      {listening && <p className="listening-status" role="status">{speechState.active ? speechState.speaking ? '正在听书 · 按句同步' : '正在准备系统语音…' : speechState.completed ? '本书已听完' : '系统听书 · 暂停后从当前句重读'}</p>}
+      <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label={listening || settings.sentenceMode ? '回退一句' : '后退一页'} onClick={() => step(-1)}><SkipBack size={21} /><span>{listening || settings.sentenceMode ? '回退一句' : '后退一页'}</span></button><button className="play-button" disabled={!hasWords} aria-label={listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label={listening || settings.sentenceMode ? '前进一句' : '前进一页'} onClick={() => step(1)}><SkipForward size={21} /><span>{listening || settings.sentenceMode ? '前进一句' : '前进一页'}</span></button></div>
       <form className="page-navigation" aria-label="页码跳转" onSubmit={event => {
         event.preventDefault();
         const input = pageInput.current;
@@ -286,7 +316,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       </form>
       <div className="reader-progress" aria-hidden="true"><i ref={progressFill} /></div>
     </div>
-    {toolsSource !== null && <ReadingTools book={book} source={toolsSource} view={toolsView} onViewChange={change => setToolsView(value => ({ ...value, ...change }))} onClose={() => setToolsSource(null)} onJump={jumpFromTools} canReturn={returnPoint !== null} onReturn={returnFromTools} onPractice={() => selectMode('practice')} onMode={selectMode} onFocus={() => { setToolsSource(null); setFocused(true); if (resumeAfterTools.current) toggle(); }} />}
+    {toolsSource !== null && <ReadingTools book={book} source={toolsSource} view={toolsView} onViewChange={change => setToolsView(value => ({ ...value, ...change }))} onClose={() => setToolsSource(null)} onJump={jumpFromTools} canReturn={returnPoint !== null} onReturn={returnFromTools} onPractice={() => selectMode('practice')} onMode={selectMode} onSpeechRate={rate => speech.seek(speech.getSnapshot().source, rate)} onFocus={() => { setToolsSource(null); setFocused(true); if (resumeAfterTools.current) toggle(); }} />}
     {practiceSource !== null && <RecitationPanel book={book} source={practiceSource} settings={settings} onSave={practice => onBookState({ practice })} onClose={() => setPracticeSource(null)} />}
   </div>;
 }

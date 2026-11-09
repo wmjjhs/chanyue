@@ -5,7 +5,7 @@ import { validateTypography, type TextRun } from './typography';
 export type ReadingDocument = {
   glyphs: string[]; offsets: number[]; words: number[]; wordOffsets: number[]; wordOrdinal: number[];
   paragraphStarts: Set<number>; spaces: Set<number>; lineStarts: number[]; length: number;
-  scales: number[]; bold: boolean[]; maxScale: number;
+  scales: number[]; bold: boolean[]; fonts: (string | undefined)[]; maxScale: number;
 };
 export type ReadingRow = {
   start: number; end: number; glyphs: number[]; columns: number[]; widths: number[]; paragraph: boolean; wordStart: number; wordEnd: number;
@@ -38,7 +38,7 @@ function* graphemes(text: string): Generator<{ segment: string; index: number }>
 export function createDocument(lines: string[], typography?: TextRun[]): ReadingDocument {
   const runs = validateTypography(typography, Math.max(0, lines.reduce((total, line) => total + line.length + 1, 0) - 1));
   let runIndex = 0;
-  const document: ReadingDocument = { glyphs: [], offsets: [], words: [], wordOffsets: [], wordOrdinal: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0, scales: [], bold: [], maxScale: 1 };
+  const document: ReadingDocument = { glyphs: [], offsets: [], words: [], wordOffsets: [], wordOrdinal: [], paragraphStarts: new Set(), spaces: new Set(), lineStarts: [], length: 0, scales: [], bold: [], fonts: [], maxScale: 1 };
   for (const line of lines) {
     document.lineStarts.push(document.length);
     let first = true;
@@ -54,6 +54,7 @@ export function createDocument(lines: string[], typography?: TextRun[]): Reading
       const run = runs[runIndex]?.start <= source ? runs[runIndex] : undefined;
       document.scales.push(run?.scale ?? 1);
       document.bold.push(run?.bold ?? false);
+      document.fonts.push(run?.font);
       document.maxScale = Math.max(document.maxScale, run?.scale ?? 1);
       document.offsets.push(source);
       document.wordOrdinal.push(isPunctuation(segment) ? -1 : document.words.length);

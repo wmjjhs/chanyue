@@ -47,6 +47,17 @@ beforeEach(() => {
 });
 
 describe('原生持久化适配器（模拟插件）', () => {
+  it('听读位置与阅读/背诵独立，合并重命名与备份完整保留', async () => {
+    const [book, other] = await loadNativeBooks();
+    const listening = { source: 4, completed: false, rate: 1.5 };
+    await Promise.all([saveNativeBookState(book.id, { listening, readingPreference: preferencesFor(defaultSettings, 'listening') }), saveNativePosition({ ...book, character: 12.5 })]);
+    await saveNativeBook({ ...book, title: '听读重命名' });
+    expect((await loadNativeBooks()).find(b => b.id === book.id)).toMatchObject({ listening, character: 12.5, readingPreference: { mode: 'listening' } });
+    expect((await loadNativeBooks()).find(b => b.id === other.id)?.listening).toBeUndefined();
+    const backup = await exportNativeBackup();
+    await deleteNativeBook(book.id); await restoreNativeBackup(backup);
+    expect((await loadNativeBooks()).find(b => b.title === '听读重命名')).toMatchObject({ listening, character: 12.5 });
+  });
   it('每书状态独立保存，旧进度与重命名不覆盖，备份恢复完整往返', async () => {
     const [book, other] = await loadNativeBooks();
     const practice: PracticeState = { source: 5, span: 2, mask: 'hidden', unit: 'paragraph' };
@@ -133,7 +144,7 @@ describe('原生持久化适配器（模拟插件）', () => {
   });
   it('保存正文、轻量进度和重命名后可恢复', async () => {
     await loadNativeBooks();
-    const typography = [{ start: 0, end: 2, scale: 2, bold: true }, { start: 3, end: 5, scale: 0.75, bold: false }];
+    const typography = [{ start: 0, end: 2, scale: 2, bold: true, font: 'KaiTi' }, { start: 3, end: 5, scale: 0.75, bold: false, font: 'SimSun' }];
     const book = { ...sampleBooks[0], id: 'import-1', title: '我的书', typography, typographyVersion: 1 as const };
     await saveNativeBook(book);
     vi.mocked(Filesystem.writeFile).mockClear();

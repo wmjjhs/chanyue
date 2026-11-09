@@ -6,7 +6,7 @@ import Reader, { type ReadingPosition } from './Reader';
 import { importBook } from './importer';
 import { defaultSettings, progressOf, textLength, updateImportedTypography, type Book, type Settings } from './model';
 import { loadBooks, loadSettings, saveSettings, saveBook, savePosition, deleteBook, saveBookState } from './storage';
-import { effectiveSettings, preferencesFor, type BookState } from './book-state';
+import { effectiveSettings, preferencesFor, validateBookState, type BookState } from './book-state';
 import { listenForAndroidBack } from './native-navigation';
 import { Capacitor } from '@capacitor/core';
 import { BackupPanel } from './BackupPanel';
@@ -87,15 +87,31 @@ export default function App() {
   };
 
   const updateBookState = useCallback(async (id: string, change: BookState) => {
-    const key = `preference:${id}`, revision = Symbol();
-    if (change.readingPreference) { latestWrites.current.set(key, revision); failedWrites.current.delete(key); }
+    const book = booksRef.current.find(value => value.id === id);
+    if (!book) throw new Error('书籍已不存在。');
+    change = validateBookState(change, textLength(book.lines));
+    const revision = Symbol(), fields = Object.keys(change) as (keyof BookState)[];
+    const keyFor = (field: keyof BookState) => `${field === 'readingPreference' ? 'preference' : field}:${id}`;
+    for (const field of fields) { latestWrites.current.set(keyFor(field), revision); failedWrites.current.delete(keyFor(field)); }
+    if (change.listening) replaceBooks(booksRef.current.map(value => value.id === id ? { ...value, listening: change.listening } : value));
     const pending = saveBookState(id, change).then(saved => {
-      if (change.readingPreference && latestWrites.current.get(key) === revision) failedWrites.current.delete(key);
-      replaceBooks(booksRef.current.map(book => book.id === id ? { ...book, ...saved } : book));
+      const currentFields = fields.filter(field => latestWrites.current.get(keyFor(field)) === revision);
+      for (const field of currentFields) failedWrites.current.delete(keyFor(field));
+      const patch = Object.fromEntries(currentFields.map(field => [field, saved[field]]));
+      replaceBooks(booksRef.current.map(value => value.id === id ? { ...value, ...patch } : value));
+    }, error => {
+      if (change.listening && latestWrites.current.get(keyFor('listening')) === revision) {
+        const listening = change.listening, key = keyFor('listening');
+        failedWrites.current.set(key, async () => {
+          if (latestWrites.current.get(key) === revision && booksRef.current.some(book => book.id === id)) await saveBookState(id, { listening });
+        });
+        notify('听读位置尚未保存，请检查空间后重试。未保存时会暂停备份。');
+      }
+      throw error;
     });
     pendingWrites.current.add(pending);
     try { await pending; } finally { pendingWrites.current.delete(pending); }
-  }, [replaceBooks]);
+  }, [replaceBooks, notify]);
   const updateSettings = (next: Settings) => {
     const book = booksRef.current.find(book => book.id === readingId);
     if (book) {

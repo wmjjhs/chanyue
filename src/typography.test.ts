@@ -5,8 +5,38 @@ import { createDocument, glyphPosition, layoutDocument, readingMetrics, sourcePo
 import { buildMotion, motionFrame, trailRange } from './reading-motion';
 import { MAX_STYLE_RUNS, normalizeFormatted, validateTypography, type TextPiece } from './typography';
 import { sampleBooks } from './samples';
+import { sourceFontFamily, validateSourceFont } from './source-font';
 
 describe('来源字体范围', () => {
+  it('原字体区别跨清洗、字号归一化与UTF16字素映射保留', () => {
+    const result = normalizeFormatted([{ text: '  宋体  ', font: 'SimSun' }, { text: '楷体🌱', font: 'KaiTi', bold: true }, { text: '\n普通', font: 'Microsoft YaHei' }]);
+    const doc = createDocument(result.lines, result.typography);
+    expect(doc.fonts).toEqual(['SimSun', 'SimSun', 'KaiTi', 'KaiTi', 'KaiTi', 'Microsoft YaHei', 'Microsoft YaHei']);
+    expect(doc.bold).toEqual([false, false, true, true, true, false, false]);
+    expect(doc.offsets).toEqual(createDocument(result.lines).offsets);
+    expect(validateTypography(result.typography, result.lines.join('\n').length)).toEqual(result.typography);
+  });
+  it('字体范围不可误合并，字体名不可注入CSS或URL', () => {
+    expect(validateTypography([{ start: 0, end: 1, scale: 1, bold: false, font: 'SimSun' }, { start: 1, end: 2, scale: 1, bold: false, font: 'KaiTi' }], 2)).toHaveLength(2);
+    for (const font of ['bad; background:url(https://evil.invalid)', 'url(https://evil.invalid)', 'x\"; color:red', '<script>', 'a'.repeat(101), 'bad\nfont']) {
+      expect(validateSourceFont(font)).toBeUndefined();
+      expect(sourceFontFamily(font)).toBeUndefined();
+    }
+    expect(validateSourceFont('@宋体')).toBe('宋体');
+    expect(sourceFontFamily('楷体')).toContain('Kaiti SC');
+    expect(sourceFontFamily('宋体')).toContain('Songti SC');
+    expect(sourceFontFamily('微软雅黑')).toContain('PingFang SC');
+    expect(createDocument(['旧书']).fonts).toEqual([undefined, undefined]);
+  });
+  it('同正文Word可补字体及清除旧粗体，保持听书背诵进度，TXT不能清除', () => {
+    const old = { ...sampleBooks[0], character: 12.75, listening: { source: 8, completed: false, rate: 1.5 }, practice: { source: 0, span: 2, mask: 'cue' as const, unit: 'paragraph' as const } };
+    const typography = [{ start: 0, end: 4, scale: 1, bold: true, font: 'KaiTi' }];
+    const incoming = { ...old, format: 'WORD' as const, typography };
+    const updated = updateImportedTypography(old, incoming)!;
+    expect(updated).toEqual({ ...old, typography, typographyVersion: 1 });
+    expect(updateImportedTypography(updated, { ...incoming, typography: [] })).toEqual({ ...old, typography: [], typographyVersion: 1 });
+    expect(updateImportedTypography(updated, { ...incoming, format: 'TXT', typography: [] })).toBeNull();
+  });
   it('样式跨片段空白清洗与旧纯文本规范完全一致', () => {
     for (const text of ['\uFEFF  甲\r\n\r\n乙\u0000\t  丙  ', '甲\r乙\n\n 丁\u00a0\t戊', ' \n\t', '甲\u2003  \u2003乙\n\uFEFF丙', 'e\u0301🌱👨‍👩‍👧‍👦\r\n阿']) {
       const pieces = Array.from(text).map(value => ({ text: value, size: 12 }));

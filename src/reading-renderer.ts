@@ -3,6 +3,7 @@ import type { Settings } from './model';
 import { type ReadingDocument, type ReadingLayout, type readingMetrics } from './reading-layout';
 import { trailRange, type motionFrame } from './reading-motion';
 import { trailOpacity } from './trail-fade';
+import { sourceFontFamily } from './source-font';
 
 type Cell = { element: HTMLSpanElement; glyph: number; column: number };
 type RowView = { element: HTMLDivElement; cells: Cell[]; trail: HTMLElement };
@@ -37,6 +38,9 @@ export class ReadingRenderer {
       span.style.width = `${row.widths[index] * this.metrics.cellWidth}px`;
       span.style.fontSize = `${this.metrics.fontSize * this.document.scales[glyph]}px`;
       span.style.fontWeight = this.document.bold[glyph] ? '700' : '400';
+      const family = sourceFontFamily(this.document.fonts[glyph]);
+      if (family) span.style.fontFamily = family;
+      inner.style.fontWeight = span.style.fontWeight;
       span.style.alignItems = 'flex-end';
       span.style.paddingBottom = `${(this.metrics.lineHeight - this.metrics.maxFontSize) / 2}px`;
       inner.textContent = this.document.glyphs[glyph];
@@ -50,11 +54,12 @@ export class ReadingRenderer {
     trail.style.height = `${this.settings.cursorThickness}px`;
     trail.style.width = '0px';
     trail.hidden = true;
-    element.replaceChildren(...cells.map(cell => cell.element), trail);
+    element.textContent = '';
+    element.append(...cells.map(cell => cell.element), trail);
     return { element, cells, trail };
   }
 
-  paint(frame: ReturnType<typeof motionFrame>) {
+  paint(frame: ReturnType<typeof motionFrame>, sentence?: { start: number; end: number }) {
     const { metrics: m } = this;
     const anchor = m.cursorRow - 1;
     const first = Math.max(0, Math.floor(frame.scroll - anchor) - 1);
@@ -82,9 +87,11 @@ export class ReadingRenderer {
         row.trail.style.left = `${range.x * m.cellWidth}px`;
         row.trail.style.width = `${range.width * m.cellWidth}px`;
         row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, frame.rowElapsed * 60 / this.settings.speed));
-        row.trail.hidden = !this.document.words.length || range.width <= 0;
+        row.trail.hidden = !!sentence || !this.document.words.length || range.width <= 0;
       }
       for (const cell of row.cells) {
+        const source = this.document.offsets[cell.glyph];
+        cell.element.classList.toggle('is-spoken-sentence', !!sentence && source >= sentence.start && source < sentence.end);
         if (rowIndex === frame.rowIndex && this.document.wordOrdinal[cell.glyph] >= 0) {
           const pen = this.settings.cursorMode === 'trail' ? frame.inkX : frame.x + frame.width / 2;
           const width = this.document.scales[cell.glyph] * (this.document.bold[cell.glyph] ? 1.04 : 1);
@@ -98,7 +105,7 @@ export class ReadingRenderer {
       nearest?.classList.add('is-current');
       this.current = nearest;
     }
-    this.cursor.hidden = this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
+    this.cursor.hidden = !!sentence || this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
     this.cursor.style.width = `${frame.width * m.cellWidth}px`;
     this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(anchor + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
     this.cursor.dataset.phase = 'scan';
@@ -106,7 +113,7 @@ export class ReadingRenderer {
   }
 
   dispose() {
-    this.container.replaceChildren();
+    this.container.textContent = '';
     this.rows.clear();
     this.current = null;
   }

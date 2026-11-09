@@ -49,6 +49,12 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
   settings: Settings; onChange: (settings: Settings) => void; onClose: () => void; bookSpecific?: boolean;
 }) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange(validateSettings({ ...settings, [key]: value }));
+  const updateRangeFill = (input: HTMLInputElement | null) => {
+    if (!input) return;
+    const min = Number(input.min), max = Number(input.max);
+    const fill = max > min ? (Number(input.value) - min) / (max - min) * 100 : 0;
+    input.style.setProperty('--range-fill', `${Math.max(0, Math.min(100, fill))}%`);
+  };
   const audioState = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getSnapshot);
   const audioError = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getError);
   const audioMessages = { idle: '开始阅读后按偏好播放', loading: '正在准备本地环境音…', playing: '环境音播放中', paused: '环境音已暂停或静音', interrupted: '声音被系统中断，请重新点击开始阅读', error: `暂时无法播放声音：${audioError ?? '音频异常'}。可重新点击开始阅读；若仍失败，请反馈此错误码。不影响阅读。` };
@@ -63,14 +69,15 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
     </div>
     <p className="field-note">{bookSpecific ? '字号、速度和句末暂停只为本书记住；配色、字体等其他设置仍为共用。' : '这里的字号、速度和句末暂停用于尚未打开过的书；已有书籍保留各自偏好。'}</p>
     <section className="settings-section"><h3>文字样式</h3>
+      <p className="field-note">Word 中已指定的字体与粗体优先保留；下方字体用于未指定原字体的文字。手机未安装的原字体会按同类字体回退，字号调整仍保留原文大小比例。</p>
       <fieldset className="font-options"><legend className="sr-only">字体类型</legend>
-        {([['song', '宋体', '温润书卷'], ['sans', '黑体', '清晰简洁'], ['kai', '楷体', '笔墨之间']] as const).map(([key, name, description]) =>
+        <div className="font-options-grid">{([['song', '宋体', '温润书卷'], ['sans', '黑体', '清晰简洁'], ['kai', '楷体', '笔墨之间']] as const).map(([key, name, description]) =>
           <button type="button" key={key} className={settings.font === key ? 'selected' : ''} aria-pressed={settings.font === key} onClick={() => set('font', key)}>
             <strong style={{ fontFamily: fonts[key] }}>{name}</strong><small>{description}</small>
-          </button>)}
+          </button>)}</div>
       </fieldset>
       <label className="range-label" htmlFor="font-size">字体大小 <output>{settings.fontSize} <small>px</small></output></label>
-      <input id="font-size" type="range" min={MIN_FONT_SIZE} max="64" value={settings.fontSize} onChange={e => set('fontSize', Number(e.target.value))} />
+      <input id="font-size" type="range" ref={updateRangeFill} min={MIN_FONT_SIZE} max="64" value={settings.fontSize} onChange={e => set('fontSize', Number(e.target.value))} />
       <div className="range-ends"><span>小</span><span>大</span></div>
       <p className="field-note">使用设备自带字体；未安装时自动使用同类字体。</p>
     </section>
@@ -88,14 +95,14 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <button aria-label="紧凑排列" aria-pressed={settings.layoutMode === 'compact'} onClick={() => set('layoutMode', 'compact')}>紧凑排列<small>保留标点，忽略段落空白</small></button>
       <button aria-label="无标点密排" aria-pressed={settings.layoutMode === 'plain'} onClick={() => set('layoutMode', 'plain')}>无标点密排<small>去标点、去空白，连续排满</small></button>
     </div><label className="range-label" htmlFor="max-lines">最多显示行数 <output>{settings.maxLines} <small>行</small></output></label>
-      <input id="max-lines" type="range" min="2" max={MAX_VISIBLE_LINES} value={settings.maxLines} onChange={e => set('maxLines', Number(e.target.value))} />
+      <input id="max-lines" type="range" ref={updateRangeFill} min="2" max={MAX_VISIBLE_LINES} value={settings.maxLines} onChange={e => set('maxLines', Number(e.target.value))} />
       <p className="field-note">最多30行，空间不足时自动减少，不会为凑行数把字号缩到12px以下。行距随可用高度均匀分配，阅读区延伸至按钮上方。每页按实际显示行数计算；字号、排版或方向改变时保留阅读位置。</p>
     </section>
     <section className="settings-section"><h3>下划线与节奏</h3>
       <label className="transparent-setting"><input type="checkbox" checked={settings.sentenceMode} onChange={event => set('sentenceMode', event.target.checked)} />按句推进，句末暂停</label>
       <p className="field-note">开启后底部翻页按钮改为前一句、后一句；开始只读当前句，句末停住等待你。分句依据原文句号、问号、感叹号、分号和换行；关闭后恢复连续阅读，仍可用页码跳转。</p>
       <label className="range-label" htmlFor="cursor-row">下划线停留行 <output>第 {settings.cursorRow} <small>行</small></output></label>
-      <input id="cursor-row" type="range" min={MIN_CURSOR_ROW} max={MAX_VISIBLE_LINES} step="1" value={settings.cursorRow} onChange={e => set('cursorRow', Number(e.target.value))} />
+      <input id="cursor-row" type="range" ref={updateRangeFill} min={MIN_CURSOR_ROW} max={MAX_VISIBLE_LINES} step="1" value={settings.cursorRow} onChange={e => set('cursorRow', Number(e.target.value))} />
       <p className="field-note">从上往下数，可选第2–30行。每行从所选位置开始，随正文在附近平滑上移；保留上一行空间，避免文字被顶部裁切。屏幕显示不足时临时使用最后可见行，恢复空间后自动回到所选行。指读与留痕均生效。</p>
       <div className="layout-options cursor-mode-options" role="group" aria-label="下划线模式">
         <button aria-label="指读" aria-pressed={settings.cursorMode === 'pointer'} onClick={() => set('cursorMode', 'pointer')}>指读<small>像笔尖指着读，经过不留痕</small></button>
@@ -105,13 +112,13 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <label className="cursor-setting">下划线颜色<input type="color" aria-label="下划线颜色" disabled={settings.cursorTransparent} value={settings.cursorColor} onChange={e => set('cursorColor', e.target.value)} /></label>
       <label className="transparent-setting"><input id="cursor-transparent" type="checkbox" checked={settings.cursorTransparent} onChange={e => set('cursorTransparent', e.target.checked)} />透明（隐藏下划线）</label>
       <label className="range-label" htmlFor="cursor-thickness">下划线粗细 <output>{settings.cursorThickness} <small>px</small></output></label>
-      <input id="cursor-thickness" type="range" min="1" max={MAX_CURSOR_THICKNESS} step="1" value={settings.cursorThickness} onChange={e => set('cursorThickness', Number(e.target.value))} />
+      <input id="cursor-thickness" type="range" ref={updateRangeFill} min="1" max={MAX_CURSOR_THICKNESS} step="1" value={settings.cursorThickness} onChange={e => set('cursorThickness', Number(e.target.value))} />
       <p className="field-note">像笔尖一样在文字下方移动，不覆盖文字，不改变文字大小和颜色。</p>
       <label className="range-label" htmlFor="cursor-words">指读覆盖字数 <output>{settings.cursorWords} <small>字</small></output></label>
-      <input id="cursor-words" type="range" min="1" max={MAX_CURSOR_WORDS} step="1" disabled={settings.cursorMode === 'trail'} value={settings.cursorWords} onChange={e => set('cursorWords', Number(e.target.value))} />
+      <input id="cursor-words" type="range" ref={updateRangeFill} min="1" max={MAX_CURSOR_WORDS} step="1" disabled={settings.cursorMode === 'trail'} value={settings.cursorWords} onChange={e => set('cursorWords', Number(e.target.value))} />
       <p className="field-note">指读可选1–50字，只计算文字，短行不足时覆盖全行。留痕模式从行首逐渐画到行末，不限制已画线条长度；切回指读后恢复原窗口字数。</p>
       <label className="range-label" htmlFor="reading-speed">阅读速度 <output>{settings.speed} <small>字 / 分钟</small></output></label>
-      <input id="reading-speed" type="range" min="30" max={MAX_READING_SPEED} step="10" value={settings.speed} onChange={e => set('speed', Number(e.target.value))} />
+      <input id="reading-speed" type="range" ref={updateRangeFill} min="30" max={MAX_READING_SPEED} step="10" value={settings.speed} onChange={e => set('speed', Number(e.target.value))} />
       <div className="range-ends"><span>30 · 慢读</span><span>{MAX_READING_SPEED} · 快读</span></div>
       <p className="field-note">总时长只按文字数计算，标点与空白不计时；经过标点不额外停顿。指读、划线与正文上移使用同一时钟，换行直接切到下一行，不另加时间。建议先用 120–300 字/分钟；不适时请暂停。</p>
     </section>
@@ -126,12 +133,12 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
         <legend className="sr-only">留痕渐淡参数</legend>
         {([['trailCurrent', '当前线不透明度', 100], ['trailRecent', '刚读完线不透明度', settings.trailCurrent], ['trailMinimum', '最淡不透明度', settings.trailRecent]] as const).map(([key, label, max]) => <div key={key}>
           <label className="range-label" htmlFor={key}>{label}<output>{settings[key]}%</output></label>
-          <input id={key} type="range" min="0" max={max} step="1" value={settings[key]} onChange={e => set(key, Number(e.target.value))} />
+          <input id={key} type="range" ref={updateRangeFill} min="0" max={max} step="1" value={settings[key]} onChange={e => set(key, Number(e.target.value))} />
         </div>)}
         <label className="range-label" htmlFor="trail-fade-lines">渐淡跨度<output>{settings.trailFadeLines} <small>行</small></output></label>
-        <input id="trail-fade-lines" type="range" min="1" max="30" step="1" value={settings.trailFadeLines} onChange={e => set('trailFadeLines', Number(e.target.value))} />
+        <input id="trail-fade-lines" type="range" ref={updateRangeFill} min="1" max="30" step="1" value={settings.trailFadeLines} onChange={e => set('trailFadeLines', Number(e.target.value))} />
         <label className="range-label" htmlFor="trail-fade-duration">过渡时长<output>{settings.trailFadeDuration.toFixed(1)} <small>秒</small></output></label>
-        <input id="trail-fade-duration" type="range" min="0" max="1" step="0.1" value={settings.trailFadeDuration} onChange={e => set('trailFadeDuration', Number(e.target.value))} />
+        <input id="trail-fade-duration" type="range" ref={updateRangeFill} min="0" max="1" step="0.1" value={settings.trailFadeDuration} onChange={e => set('trailFadeDuration', Number(e.target.value))} />
       </fieldset>
       <p className="field-note">从刚读完的上一行起，向前经过设定行数达到最淡。越早的线不会更深；最淡设0%可隐藏远处线条。过渡跟随阅读时间，暂停时不再变化；不改变阅读速度。</p>
       <button className="text-button" onClick={() => onChange({ ...settings, trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4 })}>恢复留痕默认</button>
@@ -143,7 +150,7 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
         {(['rain', 'wind', 'stream'] as const).map(sound => <button key={sound} aria-label={ambientNames[sound]} aria-pressed={settings.ambientSound === sound} onClick={() => set('ambientSound', sound)}>{ambientNames[sound]}<small>{sound === 'rain' ? '轻柔雨幕 · 实录' : sound === 'wind' ? '风过树叶 · 实录' : '苏格兰浅溪 · 实录'}</small></button>)}
       </div>
       <label className="range-label" htmlFor="ambient-volume">环境音量<output>{settings.ambientVolume}%</output></label>
-      <input id="ambient-volume" type="range" min="0" max="100" step="1" value={settings.ambientVolume} onChange={e => set('ambientVolume', Number(e.target.value))} />
+      <input id="ambient-volume" type="range" ref={updateRangeFill} min="0" max="100" step="1" value={settings.ambientVolume} onChange={e => set('ambientVolume', Number(e.target.value))} />
       <label className="transparent-setting"><input id="ambient-continue" type="checkbox" checked={settings.ambientContinuePaused} onChange={e => set('ambientContinuePaused', e.target.checked)} />阅读暂停时继续播放</label>
       <p className="ambient-status field-note" role="status" data-audio-state={audioState}>{settings.ambientEnabled ? audioMessages[audioState] : '环境音已关闭'}</p>
       <p className="field-note">已选真实自然录音，随应用离线提供并平滑循环。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>

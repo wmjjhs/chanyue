@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createBackup, encodeBackup, parseBackup, planRestore, validateBackup, validateLocalEntries, type BackupEntry } from './backup';
 import { defaultSettings } from './model';
 import { sampleBooks } from './samples';
-const entry = (): BackupEntry => ({ book: { ...sampleBooks[0], character: 3.25, contents: [{ title: '开头', source: 0, level: 1 }], typography: [{ start: 0, end: 2, scale: 2, bold: true }], typographyVersion: 1 }, notes: [{ id: 'note-1', kind: 'bookmark', start: 3.25, end: 3.25, quote: '', note: '<文字，不是HTML>', createdAt: 1, updatedAt: 1 }] });
+const entry = (): BackupEntry => ({ book: { ...sampleBooks[0], character: 3.25, contents: [{ title: '开头', source: 0, level: 1 }], typography: [{ start: 0, end: 2, scale: 2, bold: true, font: 'KaiTi' }, { start: 2, end: 4, scale: 1, bold: false, font: 'SimSun' }], typographyVersion: 1 }, notes: [{ id: 'note-1', kind: 'bookmark', start: 3.25, end: 3.25, quote: '', note: '<文字，不是HTML>', createdAt: 1, updatedAt: 1 }] });
 
 describe('书库备份与非破坏恢复', () => {
   it('单份备份限额不限制本地已有书库继续查重恢复', () => {

@@ -16,7 +16,7 @@ export function monotoneCurve(times: number[], values: number[]): Curve {
   const intervals = times.slice(1).map((time, i) => time - times[i]);
   const secants = intervals.map((duration, i) => (values[i + 1] - values[i]) / duration);
   slopes[0] = secants[0] ?? 0;
-  slopes[slopes.length - 1] = secants.at(-1) ?? 0;
+  slopes[slopes.length - 1] = secants[secants.length - 1] ?? 0;
   for (let i = 1; i < times.length - 1; i++) {
     if (secants[i - 1] * secants[i] <= 0) continue;
     const w1 = 2 * intervals[i] + intervals[i - 1];

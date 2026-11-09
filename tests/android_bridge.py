@@ -1,5 +1,6 @@
 # 版权所有：波哥
 import json
+import os
 import mimetypes
 import zipfile
 from pathlib import Path
@@ -90,7 +91,10 @@ def main():
             mime = {'.js':'application/javascript', '.mjs':'application/javascript', '.wasm':'application/wasm'}.get(Path(name).suffix)
             route.fulfill(body=apk.read(name), content_type=mime or mimetypes.guess_type(name)[0] or 'application/octet-stream')
         context.route('**/*', resource)
-        context.add_init_script(MOCK + '\n' + apk.read('assets/native-bridge.js').decode('utf-8') + '\n' + HEADERS)
+        legacy = os.environ.get('CHANYUE_LEGACY_API') == '1'
+        compatibility = "delete Object.hasOwn; delete Array.prototype.at; delete Element.prototype.replaceChildren; delete DocumentFragment.prototype.replaceChildren; delete Intl.Segmenter;" if legacy else ''
+        context.add_init_script(compatibility + '\n' + MOCK + '\n' + apk.read('assets/native-bridge.js').decode('utf-8') + '\n' + HEADERS)
+        print('Legacy WebView missing API simulation:', legacy, flush=True)
         page = context.new_page(); page.on('pageerror', lambda error: errors.append(str(error)))
         try:
             page.goto('https://localhost'); page.wait_for_load_state('networkidle')

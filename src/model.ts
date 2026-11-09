@@ -1,7 +1,7 @@
 // 版权所有：波哥
 import type { TextRun } from './typography';
 import type { ContentsEntry } from './reading-tools';
-import type { PracticeState, ReadingPreference } from './book-state';
+import type { PracticeState, ReadingPreference, ListeningState } from './book-state';
 export type BookFormat = 'TXT' | 'WORD' | 'PDF';
 export type Book = {
   id: string;
@@ -18,6 +18,7 @@ export type Book = {
   contents?: ContentsEntry[];
   practice?: PracticeState;
   readingPreference?: ReadingPreference;
+  listening?: ListeningState;
   completed: boolean;
   createdAt: number;
   lastReadAt: number;
@@ -92,7 +93,7 @@ export function validateSettings(value: unknown): Settings {
   const trailRecent = Math.min(trailCurrent, Math.round(number(v.trailRecent, 0, 100, defaultSettings.trailRecent)));
   return {
     version: 2,
-    font: v.font && Object.hasOwn(fonts, v.font) ? v.font : defaultSettings.font,
+    font: v.font && Object.prototype.hasOwnProperty.call(fonts, v.font) ? v.font : defaultSettings.font,
     fontSize: number(v.fontSize, MIN_FONT_SIZE, 64, defaultSettings.fontSize),
     speed: v.version === 2 ? number(v.speed, 30, MAX_READING_SPEED, defaultSettings.speed) : defaultSettings.speed,
     sentenceMode: boolean(v.sentenceMode, false),
@@ -137,7 +138,8 @@ export function textLength(lines: string[]): number {
 
 export function updateImportedTypography(current: Book, incoming: Book): Book | null {
   if (current.lines.length !== incoming.lines.length || current.lines.some((line, index) => line !== incoming.lines[index])) return null;
-  const typographyChanged = !!incoming.typography?.length && JSON.stringify(current.typography ?? []) !== JSON.stringify(incoming.typography);
+  const hasSourceTypography = Array.isArray(incoming.typography) && (incoming.typography.length > 0 || incoming.format === 'WORD');
+  const typographyChanged = hasSourceTypography && JSON.stringify(current.typography ?? []) !== JSON.stringify(incoming.typography);
   const contentsChanged = !!incoming.contents?.length && JSON.stringify(current.contents ?? []) !== JSON.stringify(incoming.contents);
   if (!typographyChanged && !contentsChanged) return null;
   return { ...current, ...(typographyChanged ? { typography: incoming.typography, typographyVersion: 1 as const } : {}), ...(contentsChanged ? { contents: incoming.contents } : {}) };

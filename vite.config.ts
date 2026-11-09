@@ -40,5 +40,5 @@ export default defineConfig(({ mode }) => ({
       },
     }),
   ],
-  build: { target: 'es2022', outDir: mode === 'native' ? 'dist-native' : 'dist' },
+  build: { target: ['chrome83', 'safari15'], cssTarget: ['chrome83', 'safari15'], outDir: mode === 'native' ? 'dist-native' : 'dist' },
 }));

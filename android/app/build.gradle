@@ -10,11 +10,12 @@ def signingAlias = System.getenv('CHANYUE_KEY_ALIAS') ?: 'chanyue'
 android {
     namespace = "app.chanyue.reader"
     compileSdk = rootProject.ext.compileSdkVersion
+    testBuildType project.findProperty('testBuildType') ?: 'debug'
     defaultConfig {
         applicationId "app.chanyue.reader"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
+        versionCode 15
         versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
