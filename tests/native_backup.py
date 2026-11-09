@@ -80,6 +80,16 @@ def main():
                 expect(page.locator('.reader-header')).not_to_be_visible();back(page)
                 expect(page.get_by_role('button',name='返回书架')).to_be_visible()
                 assert abs(source(page)-5.25)<.001
+                open_tools(page);page.get_by_role('button',name='收起操作区').click()
+                expect(page.locator('.reader-header')).not_to_be_visible()
+                page.evaluate('''() => {
+                  const reader = document.querySelector('.reader');
+                  const observer = new MutationObserver(() => {
+                    if (reader.classList.contains('reader-focused')) return;
+                    observer.disconnect(); window.__androidBack();
+                  });
+                  observer.observe(reader, { attributes: true, attributeFilter: ['class'] });
+                }''')
                 back(page);expect(page.get_by_role('button',name='阅读《恢复副本》',exact=True)).to_be_visible()
                 page.reload();page.wait_for_load_state('networkidle')
                 page.get_by_role('button',name='阅读《恢复副本》',exact=True).click()

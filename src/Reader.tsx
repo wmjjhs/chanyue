@@ -151,7 +151,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
 
   const pause = useCallback(() => { setRunning(false); persist(); }, [persist, setRunning]);
   useEffect(() => { if (blocked) pause(); }, [blocked, pause]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const back = (event: Event) => {
       event.preventDefault();
       if (focused) { revealControls(); return; }
