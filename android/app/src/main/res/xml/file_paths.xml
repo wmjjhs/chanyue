@@ -1,0 +1,4 @@
+<!-- 版权所有：波哥 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="temporary_files" path="." />
+</paths>

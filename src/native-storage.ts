@@ -5,6 +5,9 @@ import { textLength, validateSettings, type Book, type Settings } from './model'
 import { validateTypography } from './typography';
 import { sampleBooks } from './samples';
 import { changeNotes, validateNotes, validateContents, type NoteChange } from './reading-tools';
+import { createBackup, validateBackup, validateLocalEntries, planRestore, type Backup, type RestoreResult, type BackupEntry } from './backup';
+import { makeId } from './model';
+import { validateBookState, type BookState } from './book-state';
 
 const directory = Directory.Library;
 const root = 'Chanyue/books';
@@ -31,12 +34,13 @@ function parseBook(data: string, id: string): Book {
     book.lines.some(line => typeof line !== 'string') || !Number.isFinite(book.createdAt) || !Number.isInteger(book.cover)) {
     throw new Error('书籍数据已损坏。');
   }
-  return { ...book, typography: validateTypography(book.typography, textLength(book.lines)), contents: validateContents(book.contents, textLength(book.lines)) };
+  return { ...book, ...validateBookState(book, textLength(book.lines)), typography: validateTypography(book.typography, textLength(book.lines)), contents: validateContents(book.contents, textLength(book.lines)) };
 }
 
 function mergePosition(book: Book, position: Partial<Book>): Book {
   return {
     ...book,
+    ...validateBookState({ ...book, ...position }, textLength(book.lines)),
     line: Number.isInteger(position.line) ? Math.max(0, Math.min(book.lines.length - 1, position.line!)) : 0,
     offset: typeof position.offset === 'number' && Number.isFinite(position.offset) ? Math.max(0, Math.min(1, position.offset)) : null,
     character: typeof position.character === 'number' && Number.isFinite(position.character) ? Math.max(0, position.character) : undefined,
@@ -49,8 +53,7 @@ async function writeBook(book: Book) {
   await Filesystem.writeFile({ directory, path: pathFor(book.id), data: JSON.stringify(book), encoding: Encoding.UTF8, recursive: true });
 }
 
-export function loadNativeBooks(): Promise<Book[]> {
-  return serial(async () => {
+async function readLibrary(): Promise<Book[]> {
     try { await Filesystem.mkdir({ directory, path: root, recursive: true }); }
     catch (error) {
       if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'OS-PLUG-FILE-0010') throw error;
@@ -91,6 +94,42 @@ export function loadNativeBooks(): Promise<Book[]> {
       books.push(mergePosition(book, position && typeof position === 'object' ? position as Partial<Book> : book));
     }
     return books.sort((a, b) => b.lastReadAt - a.lastReadAt || a.createdAt - b.createdAt);
+}
+
+export function loadNativeBooks(): Promise<Book[]> { return serial(readLibrary); }
+
+async function readEntries(): Promise<BackupEntry[]> {
+  const entries: BackupEntry[] = [];
+  for (const book of await readLibrary()) entries.push({ book, notes: await readNotes(book.id, book.lines.join('\n')) });
+  return entries;
+}
+export function exportNativeBackup(): Promise<Backup> { return serial(async () => createBackup(await readEntries(), await loadNativeSettings())); }
+export function restoreNativeBackup(value: Backup): Promise<RestoreResult> {
+  const backup = validateBackup(value);
+  return serial(async () => {
+    const current = validateLocalEntries(await readEntries()), { additions, skipped } = planRestore(current, backup.books);
+    const result = { added: 0, skipped, failed: 0 };
+    const names = new Set((await Filesystem.readdir({ directory, path: root })).files.map(file => file.name));
+    for (const entry of additions) {
+      let id = makeId();
+      while ([...names].some(name => name.startsWith(id + '.'))) id = makeId();
+      const book = { ...entry.book, id }, temporary = `${root}/${id}.restore.tmp`, notesPath = `${root}/${id}.notes.1.json`;
+      try {
+        await Preferences.remove({ key: positionKey(id) });
+        const encodedNotes = JSON.stringify(entry.notes), encodedBook = JSON.stringify(book);
+        await Filesystem.writeFile({ directory, path: notesPath, data: encodedNotes, encoding: Encoding.UTF8 });
+        if ((await Filesystem.readFile({ directory, path: notesPath, encoding: Encoding.UTF8 })).data !== encodedNotes) throw new Error('笔记写入不完整');
+        await Filesystem.writeFile({ directory, path: temporary, data: encodedBook, encoding: Encoding.UTF8 });
+        if ((await Filesystem.readFile({ directory, path: temporary, encoding: Encoding.UTF8 })).data !== encodedBook) throw new Error('正文写入不完整');
+        await Filesystem.rename({ directory, from: temporary, to: pathFor(id) });
+        names.add(`${id}.json`); result.added++;
+      } catch {
+        for (const path of [temporary, notesPath]) { try { await Filesystem.deleteFile({ directory, path }); } catch {} }
+        result.failed = additions.length - result.added;
+        break;
+      }
+    }
+    return result;
   });
 }
 
@@ -100,7 +139,21 @@ export function saveNativeBook(book: Book) {
 
 export function saveNativePosition({ id, line, offset, character, completed, lastReadAt }: Book) {
   pathFor(id);
-  return serial(() => Preferences.set({ key: positionKey(id), value: JSON.stringify({ line, offset, character, completed, lastReadAt }) }));
+  return serial(async () => {
+    const previous = (await Preferences.get({ key: positionKey(id) })).value;
+    await Preferences.set({ key: positionKey(id), value: JSON.stringify({ ...(previous ? JSON.parse(previous) : {}), line, offset, character, completed, lastReadAt }) });
+  });
+}
+export function saveNativeBookState(id: string, change: BookState): Promise<BookState> {
+  pathFor(id);
+  return serial(async () => {
+    const book = await readNoteBook(id), length = textLength(book.lines);
+    const saved = (await Preferences.get({ key: positionKey(id) })).value;
+    const previous = saved ? JSON.parse(saved) : { line: book.line, offset: book.offset, character: book.character, completed: book.completed, lastReadAt: book.lastReadAt };
+    const state = { ...validateBookState({ ...book, ...previous }, length), ...validateBookState(change, length) };
+    await Preferences.set({ key: positionKey(id), value: JSON.stringify({ ...previous, ...state }) });
+    return state;
+  });
 }
 
 export function deleteNativeBook(id: string) {

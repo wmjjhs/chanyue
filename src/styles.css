@@ -413,6 +413,29 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
   .reading-tools-modal .tools-summary, .reading-tools-modal .tools-tabs { margin-bottom: 8px; }
   .reading-tools-modal .tools-tabs button { min-height: 36px; }
 }
+.backup-modal, .recitation-modal { width: min(600px, calc(100vw - 24px)); }
+.backup-preview { margin-top: 22px; border-top: 1px solid #dce3d3; padding-top: 14px; font-size: 14px; }
+.backup-settings { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 18px 0; }
+.backup-modal .secondary-button, .recitation-modal .secondary-button { border: 1px solid #dbe3d1; border-radius: 7px; background: #f4f7ee; color: #506240; min-height: 42px; padding: 10px 14px; font: inherit; font-size: 13px; }
+.backup-download { display: inline-flex; align-items: center; text-decoration: none; margin: 10px 0; }
+.library-footer { flex-wrap: wrap; gap: 12px; }
+.practice-entry { align-self: flex-start; margin-top: 12px; font-size: 12px; }
+.reader-v2.reader-focused { padding-top: max(env(safe-area-inset-top), 12px); }
+.reader-focused > .reader-header, .reader-focused > .v2-controls { display: none; }
+.focus-restore { position: fixed; right: max(env(safe-area-inset-right), 12px); top: max(env(safe-area-inset-top), 8px); z-index: 3; width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 50%; background: color-mix(in srgb, var(--reader-button-text) 94%, var(--reader-ink)); color: var(--reader-ink); }
+.book-mode { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 12px; border-top: 1px solid #dbe3d1; padding-top: 10px; }
+.book-mode select { font: inherit; color: inherit; background: transparent; border: 1px solid #dbe3d1; border-radius: 6px; padding: 7px 4px; max-width: 120px; }
+.practice-navigation { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 12px 0 20px; font-size: 12px; }
+.practice-range { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 13px; margin: 18px 0; }
+.practice-range select { background: transparent; color: inherit; font: inherit; border: 1px solid #dbe3d1; border-radius: 6px; padding: 8px; }
+.practice-levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 16px; }
+.practice-levels .secondary-button { padding: 10px 4px; min-height: 40px; font-size: 12px; }
+.practice-levels [aria-pressed="true"] { background: #e5ecd9; color: #385229; border-color: #91a77d; }
+.practice-text { border-radius: 10px; padding: 14px; max-height: 38dvh; overflow-y: auto; line-height: 1.9; overscroll-behavior: contain; }
+.practice-sentence { display: block; width: 100%; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; background: transparent; border: 0; border-radius: 6px; color: inherit; font: inherit; padding: 8px; }
+.practice-sentence:disabled { opacity: 1; cursor: text; }
+.practice-sentence[aria-pressed="true"] { outline: 1px dashed currentColor; outline-offset: -2px; }
+@media (max-width: 560px) { .backup-modal, .recitation-modal { padding: 20px 16px; } }
 .cursor-setting { display: flex; align-items: center; justify-content: space-between; margin: 17px 0; font-size: 12px; }
 .cursor-setting input { width: 40px; height: 32px; }
 .transparent-setting { display: flex; align-items: center; gap: 9px; min-height: 40px; font-size: 12px; cursor: pointer; }

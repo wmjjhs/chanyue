@@ -5,6 +5,12 @@ const config: CapacitorConfig = {
   appId: 'app.chanyue.reader',
   appName: '禅阅',
   webDir: 'dist-native',
+  android: {
+    backgroundColor: '#f7f7f2',
+    allowMixedContent: false,
+    webContentsDebuggingEnabled: false,
+    loggingBehavior: 'none',
+  },
   ios: {
     contentInset: 'never',
     backgroundColor: '#f7f7f2',

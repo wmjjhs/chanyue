@@ -450,13 +450,14 @@ def assert_migration(browser, device, url):
 
 
 def main():
-    native = '--native' in sys.argv
+    android = '--android' in sys.argv
+    native = '--native' in sys.argv or android
     bundle = (ROOT / 'dist-native').resolve()
     url = 'https://chanyue-tools-offline.invalid' if native else next((arg for arg in sys.argv[1:] if arg.startswith('http')), 'http://127.0.0.1:4175')
     with sync_playwright() as p:
-        for engine in [p.chromium, p.webkit]:
+        for engine in ([p.chromium] if android else [p.chromium, p.webkit]):
             browser = engine.launch(headless=True)
-            context = browser.new_context(**p.devices['iPhone 13'], service_workers='block')
+            context = browser.new_context(**p.devices['Pixel 7' if android else 'iPhone 13'], service_workers='block')
             errors = []
             if native:
                 def bundled(route):
@@ -480,7 +481,8 @@ def main():
                 assert not errors, errors
             finally:
                 context.close(); browser.close()
-    (ARTIFACTS / ('tools-native-result.json' if native else 'tools-result.json')).write_text(json.dumps({'_copyright':'版权所有：波哥','status':'passed','browsers':['chromium','webkit']}), encoding='utf-8')
+    name = 'tools-android-result.json' if android else 'tools-native-result.json' if native else 'tools-result.json'
+    (ARTIFACTS / name).write_text(json.dumps({'_copyright':'版权所有：波哥','status':'passed','browsers':['chromium'] if android else ['chromium','webkit'],'device':'Pixel 7' if android else 'iPhone 13','nativeBridgeTested':False}), encoding='utf-8')
 
 
 if __name__ == '__main__':

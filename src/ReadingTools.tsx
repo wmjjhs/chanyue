@@ -8,9 +8,10 @@ import { contextAt, excerptAt, excerptContextAt, currentContentsIndex, searchBoo
 
 export type ReadingToolsView = { tab: 'contents' | 'search' | 'notes'; query: string; hit: number | null };
 type Draft = { value: ReadingNote; context: ReturnType<typeof excerptContextAt>; editing: boolean; dirty: boolean; expected?: string };
-export function ReadingTools({ book, source, view, onViewChange, onClose, onJump, canReturn, onReturn }: {
+export function ReadingTools({ book, source, view, onViewChange, onClose, onJump, canReturn, onReturn, onPractice, onMode, onFocus }: {
   book: Book; source: number; view: ReadingToolsView; onViewChange: (change: Partial<ReadingToolsView>) => void;
-  onClose: () => void; onJump: (source: number) => void; canReturn: boolean; onReturn: () => void;
+  onClose: () => void; onJump: (source: number) => void; canReturn: boolean; onReturn: () => void; onPractice: () => Promise<void>;
+  onMode: (mode: 'reading' | 'reciting' | 'practice') => Promise<void>; onFocus: () => void;
 }) {
   const text = useMemo(() => book.lines.join('\n'), [book.lines]);
   const { tab, query } = view;
@@ -97,6 +98,13 @@ export function ReadingTools({ book, source, view, onViewChange, onClose, onJump
     if (start !== draft.value.start || end !== draft.value.end) setDraft({ ...draft, value: { ...draft.value, start, end, quote: text.slice(start, end) }, dirty: true });
     setError('');
   };
+  const useMode = async (action: () => Promise<void>) => {
+    if (inFlight.current) return;
+    inFlight.current = true; setBusy(true); setError('');
+    try { await action(); }
+    catch { if (alive.current) setError('本书使用方式未保存，请检查空间后重试。'); }
+    finally { inFlight.current = false; if (alive.current) setBusy(false); }
+  };
   const percentage = (at: number) => `${Math.min(100, Math.floor(at / Math.max(1, text.length) * 100))}%`;
   const disabled = loading || loadError || busy;
   const jump = (target: number) => {
@@ -148,6 +156,8 @@ export function ReadingTools({ book, source, view, onViewChange, onClose, onJump
         </>}
         {tab === 'notes' && <><div className="tools-actions"><button className="secondary-button" disabled={disabled || notes.length >= MAX_NOTES} onClick={() => begin('bookmark')}><Bookmark size={16} />记住当前位置</button><button className="secondary-button" disabled={disabled || notes.length >= MAX_NOTES} onClick={() => begin('excerpt')}><Quote size={16} />摘录当前句</button></div><p className="field-note">{loading ? '正在读取本书记录…' : `${notes.length} / ${MAX_NOTES} 条 · 仅保存于当前设备，删除书籍也会删除这些记录`}</p>{!loading && !notes.length && !loadError && <p className="tools-empty">把值得再读的位置留下来。<br />不打卡，不催促，只为下次找得到。</p>}<ol className="tools-list">{notes.map(note => <li key={note.id} className="tools-note"><button className="tools-result" onClick={() => jump(note.start)} disabled={busy}><span><small>{note.kind === 'bookmark' ? '书签' : '摘录'} · {percentage(note.start)}</small><span className="tools-note-preview">{note.kind === 'excerpt' ? note.quote : contextAt(text, note.start).text}</span>{note.note && <em className="tools-note-preview">{note.note}</em>}</span></button>{remove === note.id ? <div className="tools-actions"><span>删除这条记录？</span><button className="text-button" disabled={busy} onClick={() => setRemove(null)}>取消</button><button className="text-button danger" disabled={busy} onClick={() => void persist({ type: 'remove', id: note.id, expected: noteRevision(note) })}>确认删除</button></div> : <div className="tools-note-actions"><button className="text-button" disabled={disabled} onClick={() => edit(note)}><Pencil size={14} />编辑</button><button className="text-button" disabled={disabled} onClick={() => { setRemove(note.id); setNotice(''); }}><Trash2 size={14} />删除</button></div>}</li>)}</ol></>}
       </section>
+      <div className="book-mode"><label>本书方式 <select aria-label="本书使用方式" disabled={busy} value={book.readingPreference?.mode ?? 'reading'} onChange={event => void useMode(() => onMode(event.target.value as 'reading' | 'reciting' | 'practice'))}><option value="reading">阅读</option><option value="reciting">连续念诵</option><option value="practice">背诵</option></select></label><button className="text-button" disabled={busy} onClick={() => { if (!inFlight.current) onFocus(); }}>收起操作区</button></div>
+      <button className="text-button practice-entry" disabled={busy} onClick={() => void useMode(onPractice)}>{book.practice ? '继续上次背诵' : '从当前位置练习小段背诵'}</button>
     </>}
   </Modal>;
 }

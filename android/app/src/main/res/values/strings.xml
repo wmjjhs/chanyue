@@ -1,0 +1,7 @@
+<!-- 版权所有：波哥 -->
+<resources>
+    <string name="app_name">禅阅</string>
+    <string name="title_activity_main">禅阅</string>
+    <string name="package_name">app.chanyue.reader</string>
+    <string name="custom_url_scheme">app.chanyue.reader</string>
+</resources>

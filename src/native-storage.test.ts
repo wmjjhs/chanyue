@@ -35,6 +35,9 @@ vi.mock('@capacitor/preferences', () => ({ Preferences: {
 } }));
 import { deleteNativeBook, loadNativeBooks, loadNativeSettings, saveNativeBook, saveNativePosition, saveNativeSettings, loadNativeNotes, mutateNativeNotes } from './native-storage';
 import { noteRevision, type ReadingNote } from './reading-tools';
+import { exportNativeBackup, restoreNativeBackup, saveNativeBookState } from './native-storage';
+import { preferencesFor, type PracticeState } from './book-state';
+import { createBackup } from './backup';
 import { Filesystem } from '@capacitor/filesystem';
 import { Preferences } from '@capacitor/preferences';
 
@@ -44,6 +47,85 @@ beforeEach(() => {
 });
 
 describe('原生持久化适配器（模拟插件）', () => {
+  it('每书状态独立保存，旧进度与重命名不覆盖，备份恢复完整往返', async () => {
+    const [book, other] = await loadNativeBooks();
+    const practice: PracticeState = { source: 5, span: 2, mask: 'hidden', unit: 'paragraph' };
+    const readingPreference = preferencesFor({ ...defaultSettings, fontSize: 38, speed: 180 }, 'practice');
+    await Promise.all([saveNativeBookState(book.id, { practice }), saveNativePosition({ ...book, character: 5.25 }), saveNativeBookState(book.id, { readingPreference })]);
+    await saveNativeBook({ ...book, title: '原书重命名' });
+    let saved = (await loadNativeBooks()).find(b => b.id === book.id)!;
+    expect(saved).toMatchObject({ practice, readingPreference, character: 5.25, title: '原书重命名' });
+    expect((await loadNativeBooks()).find(b => b.id === other.id)?.practice).toBeUndefined();
+    const backup = await exportNativeBackup();
+    expect(backup.books.find(e => e.book.id === book.id)?.book).toMatchObject({ practice, readingPreference });
+    await deleteNativeBook(book.id);
+    await expect(saveNativeBookState(book.id, { practice })).rejects.toThrow();
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 1, skipped: 2, failed: 0 });
+    saved = (await loadNativeBooks()).find(b => b.title === '原书重命名')!;
+    await saveNativePosition({ ...saved, character: 10.5 });
+    expect((await loadNativeBooks()).find(b => b.id === saved.id)).toMatchObject({ practice, readingPreference, character: 10.5 });
+    expect(await restoreNativeBackup(await exportNativeBackup())).toEqual({ added: 0, skipped: 3, failed: 0 });
+  });
+  it('每书状态写入失败与非法范围不覆盖旧记录，队列仍能重试', async () => {
+    const [book] = await loadNativeBooks();
+    const practice: PracticeState = { source: 5, span: 1, mask: 'cue', unit: 'paragraph' };
+    await saveNativeBookState(book.id, { practice });
+    vi.mocked(Preferences.set).mockRejectedValueOnce(new Error('full'));
+    await expect(saveNativeBookState(book.id, { practice: { ...practice, source: 10 } })).rejects.toThrow();
+    expect((await loadNativeBooks()).find(b => b.id === book.id)?.practice).toEqual(practice);
+    await expect(saveNativeBookState(book.id, { practice: { ...practice, source: -1 } })).rejects.toThrow();
+    await saveNativeBookState(book.id, { practice: { ...practice, source: 10 } });
+    expect((await loadNativeBooks()).find(b => b.id === book.id)?.practice?.source).toBe(10);
+  });
+  it('备份排在进度写入之后，保留真实小数进度与独立笔记', async () => {
+    const [book] = await loadNativeBooks();
+    const note: ReadingNote = { id: 'backup-note', kind: 'bookmark', start: 1.5, end: 1.5, quote: '', note: '记住', createdAt: 1, updatedAt: 1 };
+    await mutateNativeNotes(book.id, { type: 'put', value: note });
+    const saving = saveNativePosition({ ...book, character: 5.25, lastReadAt: 88 });
+    const backup = await exportNativeBackup(); await saving;
+    expect(backup.books.find(entry => entry.book.id === book.id)).toMatchObject({ book: { character: 5.25, lastReadAt: 88 }, notes: [note] });
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 0, skipped: 3, failed: 0 });
+  });
+  it('恢复不同数据时新增副本且可重复恢复，原正文和笔记不改', async () => {
+    const [book] = await loadNativeBooks();
+    const original = new Map(state.files);
+    const note: ReadingNote = { id: 'backup-note', kind: 'bookmark', start: 1.5, end: 1.5, quote: '', note: '恢复记录', createdAt: 1, updatedAt: 1 };
+    const backup = createBackup([{ book: { ...book, character: 5.25 }, notes: [note] }], defaultSettings);
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 1, skipped: 0, failed: 0 });
+    for (const [key, value] of original) expect(state.files.get(key)).toBe(value);
+    const added = (await loadNativeBooks()).find(value => value.id !== book.id && value.character === 5.25)!;
+    expect(added).toBeDefined(); expect(await loadNativeNotes(added.id)).toEqual([note]);
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 0, skipped: 1, failed: 0 });
+    expect(await loadNativeNotes(book.id)).toEqual([]);
+  });
+  it('恢复提交失败保留旧库，后续重试仍能完成', async () => {
+    const [book] = await loadNativeBooks(), original = new Map(state.files);
+    const backup = createBackup([{ book: { ...book, title: '新备份' }, notes: [] }], defaultSettings);
+    state.failRename = true;
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 0, skipped: 0, failed: 1 });
+    expect(state.files).toEqual(original);
+    state.failRename = false;
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 1, skipped: 0, failed: 0 });
+  });
+  it('逐本提交失败准确报告部分成功，再次恢复跳过已完成项', async () => {
+    const [book] = await loadNativeBooks();
+    const backup = createBackup([{ book: { ...book, id: 'incoming-1', title: '第一本恢复' }, notes: [] }, { book: { ...book, id: 'incoming-2', title: '第二本恢复' }, notes: [] }], defaultSettings);
+    const rename = vi.mocked(Filesystem.rename), implementation = rename.getMockImplementation()!;
+    rename.mockImplementationOnce(implementation).mockRejectedValueOnce(new Error('disk error'));
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 1, skipped: 0, failed: 1 });
+    expect(await loadNativeBooks()).toHaveLength(4);
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 1, skipped: 1, failed: 0 });
+    expect(await loadNativeBooks()).toHaveLength(5);
+  });
+  it('恢复回读核验失败时不发布书籍，不生成只有正文没有笔记的副本', async () => {
+    const [book] = await loadNativeBooks(), original = new Map(state.files);
+    const write = vi.mocked(Filesystem.writeFile), implementation = write.getMockImplementation()!;
+    write.mockImplementationOnce(async options => { state.files.set(options.path, 'truncated'); return { uri: options.path }; });
+    const backup = createBackup([{ book: { ...book, title: '核验' }, notes: [] }], defaultSettings);
+    expect(await restoreNativeBackup(backup)).toEqual({ added: 0, skipped: 0, failed: 1 });
+    expect(state.files).toEqual(original);
+    write.mockImplementation(implementation);
+  });
   it('首次建立书库，重复打开已有目录不会失败', async () => {
     expect(await loadNativeBooks()).toHaveLength(3);
     expect(await loadNativeBooks()).toHaveLength(3);

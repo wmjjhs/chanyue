@@ -136,13 +136,14 @@ def assert_import_typography(page, label):
 
 
 def main():
-    native = '--native' in sys.argv
+    android = '--android' in sys.argv
+    native = '--native' in sys.argv or android
     url = 'https://chanyue-format-offline.invalid' if native else sys.argv[1] if len(sys.argv)>1 else 'http://127.0.0.1:4173'
     bundle = (ROOT / 'dist-native').resolve()
     with sync_playwright() as p:
-        for engine in [p.chromium, p.webkit]:
+        for engine in ([p.chromium] if android else [p.chromium, p.webkit]):
             browser = engine.launch(headless=True)
-            context = browser.new_context(**p.devices['iPhone 13'], service_workers='block' if native else 'allow')
+            context = browser.new_context(**p.devices['Pixel 7' if android else 'iPhone 13'], service_workers='block' if native else 'allow')
             page = context.new_page(); errors = []
             if native:
                 def bundled(route):
@@ -164,8 +165,8 @@ def main():
                 assert not errors, errors
             finally:
                 context.close(); browser.close()
-    name = 'typography-native-result.json' if native else 'typography-result.json'
-    (ARTIFACTS / name).write_text(json.dumps({'_copyright':'版权所有：波哥','status':'passed','browsers':['chromium','webkit'],'bundledOffline':native}), encoding='utf-8')
+    name = 'typography-android-result.json' if android else 'typography-native-result.json' if native else 'typography-result.json'
+    (ARTIFACTS / name).write_text(json.dumps({'_copyright':'版权所有：波哥','status':'passed','browsers':['chromium'] if android else ['chromium','webkit'],'bundledOffline':native,'nativeBridgeTested':False}), encoding='utf-8')
 
 
 if __name__ == '__main__':

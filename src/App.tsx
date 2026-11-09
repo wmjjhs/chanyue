@@ -1,11 +1,15 @@
 // 版权所有：波哥
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react';
 import { BookOpen, Library, SlidersHorizontal, CircleHelp, Plus, ArrowUpRight, ArrowRight, Search, ChevronDown, MoreHorizontal, Upload, FileText, X, ShieldCheck, Leaf, Check, LoaderCircle, Trash2, Pencil, CheckCircle2, Coffee, Smartphone } from 'lucide-react';
 import { Brand, BookCover, Modal, SettingsPanel, Guide } from './components';
 import Reader, { type ReadingPosition } from './Reader';
 import { importBook } from './importer';
 import { defaultSettings, progressOf, textLength, updateImportedTypography, type Book, type Settings } from './model';
-import { loadBooks, loadSettings, saveSettings, saveBook, savePosition, deleteBook } from './storage';
+import { loadBooks, loadSettings, saveSettings, saveBook, savePosition, deleteBook, saveBookState } from './storage';
+import { effectiveSettings, preferencesFor, type BookState } from './book-state';
+import { listenForAndroidBack } from './native-navigation';
+import { Capacitor } from '@capacitor/core';
+import { BackupPanel } from './BackupPanel';
 
 export default function App() {
   const [books, setBooks] = useState<Book[]>([]);
@@ -14,7 +18,7 @@ export default function App() {
   const [storageError, setStorageError] = useState(false);
   const [settings, setSettings] = useState<Settings>({ ...defaultSettings });
   const [readingId, setReadingId] = useState<string | null>(null);
-  const [panel, setPanel] = useState<'settings' | 'guide' | 'import' | null>(null);
+  const [panel, setPanel] = useState<'settings' | 'guide' | 'import' | 'backup' | null>(null);
   const [manageId, setManageId] = useState<string | null>(null);
   const [newTitle, setNewTitle] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -31,6 +35,21 @@ export default function App() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [retry, setRetry] = useState(0);
+  const pendingWrites = useRef(new Set<Promise<unknown>>());
+  const failedWrites = useRef(new Map<string, () => Promise<unknown>>());
+  const latestWrites = useRef(new Map<string, symbol>());
+  const trackWrite = useCallback((key: string, action: () => Promise<unknown>, onError: () => void) => {
+    const revision = Symbol(); latestWrites.current.set(key, revision);
+    const pending = action().then(() => { if (latestWrites.current.get(key) === revision) failedWrites.current.delete(key); }, () => { if (latestWrites.current.get(key) === revision) { failedWrites.current.set(key, action); onError(); } }).finally(() => pendingWrites.current.delete(pending));
+    pendingWrites.current.add(pending);
+  }, []);
+  const waitWrites = async () => {
+    await Promise.all([...pendingWrites.current]);
+    for (const [key, action] of failedWrites.current) {
+      try { await action(); failedWrites.current.delete(key); }
+      catch { throw new Error('最近的进度或设置尚未保存，备份操作已暂停。请检查空间后重试。'); }
+    }
+  };
 
   const notify = useCallback((message: string) => {
     setToast(message);
@@ -52,21 +71,42 @@ export default function App() {
   }, [replaceBooks, retry]);
 
   useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
+  useEffect(listenForAndroidBack, []);
 
   const updateBook = useCallback((book: Book) => {
     replaceBooks(booksRef.current.map(value => value.id === book.id ? book : value));
-    void savePosition(book).catch(() => notify('保存失败：浏览器存储空间可能不足，请保留原始书籍文件。'));
-  }, [notify, replaceBooks]);
+    trackWrite(book.id, () => savePosition(book), () => notify('保存失败：浏览器存储空间可能不足，请保留原始书籍文件。'));
+  }, [notify, replaceBooks, trackWrite]);
 
   const readBook = (book: Book) => {
-    updateBook({ ...book, lastReadAt: Date.now() });
+    const readingPreference = book.readingPreference ?? preferencesFor(settings);
+    updateBook({ ...book, readingPreference, lastReadAt: Date.now() });
+    if (!book.readingPreference) trackWrite(`preference:${book.id}`, () => saveBookState(book.id, { readingPreference }), () => notify('本书偏好尚未保存，请检查空间后重试。'));
     setReadingId(book.id);
     window.scrollTo(0, 0);
   };
 
+  const updateBookState = useCallback(async (id: string, change: BookState) => {
+    const key = `preference:${id}`, revision = Symbol();
+    if (change.readingPreference) { latestWrites.current.set(key, revision); failedWrites.current.delete(key); }
+    const pending = saveBookState(id, change).then(saved => {
+      if (change.readingPreference && latestWrites.current.get(key) === revision) failedWrites.current.delete(key);
+      replaceBooks(booksRef.current.map(book => book.id === id ? { ...book, ...saved } : book));
+    });
+    pendingWrites.current.add(pending);
+    try { await pending; } finally { pendingWrites.current.delete(pending); }
+  }, [replaceBooks]);
   const updateSettings = (next: Settings) => {
+    const book = booksRef.current.find(book => book.id === readingId);
+    if (book) {
+      const mode = book.readingPreference?.mode === 'reciting' && next.sentenceMode ? 'reading' : book.readingPreference?.mode ?? 'reading';
+      const preference = preferencesFor(next, mode);
+      replaceBooks(booksRef.current.map(value => value.id === book.id ? { ...value, readingPreference: preference } : value));
+      trackWrite(`preference:${book.id}`, () => saveBookState(book.id, { readingPreference: preference }), () => notify('本书偏好尚未保存，请检查空间后重试。'));
+      next = { ...next, fontSize: settings.fontSize, speed: settings.speed, sentenceMode: settings.sentenceMode };
+    }
     setSettings(next);
-    void saveSettings(next).catch(() => notify('本次设置已生效，但未能保存到本机，下次打开可能需要重新设置。'));
+    trackWrite('settings', () => saveSettings(next), () => notify('本次设置已生效，但未能保存到本机，下次打开可能需要重新设置。'));
   };
 
   const importFiles = async (files: File[]) => {
@@ -111,6 +151,7 @@ export default function App() {
     void importFiles(Array.from(event.dataTransfer.files));
   };
   const current = books.find(book => book.id === readingId);
+  const currentSettings = useMemo(() => effectiveSettings(settings, current), [settings, current?.readingPreference]);
   const managed = books.find(book => book.id === manageId);
   const continuing = [...books].sort((a, b) => b.lastReadAt - a.lastReadAt || a.createdAt - b.createdAt)[0];
   const filtered = books.filter(book =>
@@ -120,7 +161,7 @@ export default function App() {
   const progress = continuing ? progressOf(continuing) : 0;
 
   return <>
-    {current ? <Reader key={current.id} book={current} settings={settings} onBack={() => setReadingId(null)} onSettings={() => setPanel('settings')} blocked={panel !== null}
+    {current ? <Reader key={current.id} book={current} settings={currentSettings} onBookState={change => updateBookState(current.id, change)} onBack={() => setReadingId(null)} onSettings={() => setPanel('settings')} blocked={panel !== null}
       onProgress={(position: ReadingPosition) => {
         const stored = booksRef.current.find(book => book.id === current.id);
         if (stored) updateBook({ ...stored, ...position, lastReadAt: Date.now() });
@@ -166,12 +207,13 @@ export default function App() {
             </section>
             <div className="reading-note"><div className="note-icon"><Coffee size={23} strokeWidth={1.2} /></div><div><h3>不必读得很快，只需读得自在。</h3><p>多行文字，逐字光标。保留段落或紧凑排列，让每一字都跟得上。</p></div><button className="text-button" onClick={() => setPanel('settings')}>调整我的节奏 <ArrowRight size={16} /></button></div>
           </>}
-          <footer className="library-footer"><span><ShieldCheck size={14} />书籍仅保存在本机，不上传云端</span><button onClick={() => setPanel('guide')}><Smartphone size={14} />在 iPhone 上使用 <ArrowUpRight size={12} /></button></footer>
+          <footer className="library-footer"><span><ShieldCheck size={14} />书籍仅保存在本机，不上传云端</span><button disabled={loading || storageError || busy || managing} onClick={() => setPanel('backup')}>备份与恢复</button><button onClick={() => setPanel('guide')}><Smartphone size={14} />{Capacitor.isNativePlatform() ? '使用指南' : '在手机上使用'} <ArrowUpRight size={12} /></button></footer>
         </main>
       </div>
       <nav className="mobile-nav" aria-label="手机导航"><button className="active" onClick={() => { setFilter('全部书籍'); setSearch(''); }}><Library size={20} /><span>书架</span></button><button onClick={openImport} disabled={storageError || loading}><Plus size={21} /><span>导入</span></button><button onClick={() => setPanel('settings')}><SlidersHorizontal size={20} /><span>设置</span></button><button onClick={() => setPanel('guide')}><CircleHelp size={20} /><span>指南</span></button></nav>
     </div>}
-    {panel === 'settings' && <SettingsPanel settings={settings} onChange={updateSettings} onClose={() => setPanel(null)} />}
+    {panel === 'backup' && <BackupPanel onClose={() => setPanel(null)} waitWrites={waitWrites} onReload={async () => replaceBooks(await loadBooks())} onSettingsSaved={setSettings} />}
+    {panel === 'settings' && <SettingsPanel settings={currentSettings} bookSpecific={!!current} onChange={updateSettings} onClose={() => setPanel(null)} />}
     {panel === 'guide' && <Guide onClose={() => setPanel(null)} />}
     {panel === 'import' && <Modal title="把喜欢的书，带进来" eyebrow="YOUR PRIVATE LIBRARY / 导入书籍" onClose={() => { if (!busy) setPanel(null); }} className="import-modal">
       <p className="modal-description">一本好书，就是一段属于自己的时光。</p>

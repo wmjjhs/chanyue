@@ -1,6 +1,7 @@
 // 版权所有：波哥
 import type { TextRun } from './typography';
 import type { ContentsEntry } from './reading-tools';
+import type { PracticeState, ReadingPreference } from './book-state';
 export type BookFormat = 'TXT' | 'WORD' | 'PDF';
 export type Book = {
   id: string;
@@ -15,6 +16,8 @@ export type Book = {
   typography?: TextRun[];
   typographyVersion?: 1;
   contents?: ContentsEntry[];
+  practice?: PracticeState;
+  readingPreference?: ReadingPreference;
   completed: boolean;
   createdAt: number;
   lastReadAt: number;
@@ -30,6 +33,7 @@ export type Settings = {
   lineColor: string;
   pageColor: string;
   speed: number;
+  sentenceMode: boolean;
   maxLines: number;
   layoutMode: 'semantic' | 'compact' | 'plain';
   cursorColor: string;
@@ -65,7 +69,7 @@ export const MAX_CURSOR_THICKNESS = 6;
 
 export const defaultSettings: Settings = {
   version: 2, font: 'song', fontSize: 28, textColor: '#364032',
-  lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240,
+  lineColor: '#eff1e7', pageColor: '#f7f7f2', speed: 240, sentenceMode: false,
   maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer', cursorRow: 2,
   trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4,
   ambientEnabled: false, ambientSound: 'rain', ambientVolume: 20, ambientContinuePaused: true,
@@ -91,6 +95,7 @@ export function validateSettings(value: unknown): Settings {
     font: v.font && Object.hasOwn(fonts, v.font) ? v.font : defaultSettings.font,
     fontSize: number(v.fontSize, MIN_FONT_SIZE, 64, defaultSettings.fontSize),
     speed: v.version === 2 ? number(v.speed, 30, MAX_READING_SPEED, defaultSettings.speed) : defaultSettings.speed,
+    sentenceMode: boolean(v.sentenceMode, false),
     textColor: color(v.textColor, defaultSettings.textColor),
     lineColor: color(v.lineColor, defaultSettings.lineColor),
     pageColor: color(v.pageColor, defaultSettings.pageColor),
