@@ -46,6 +46,40 @@ class IOSPackagingTests(unittest.TestCase):
                 self.assertEqual(error.exception.returncode, 65)
                 self.assertEqual(log.read_text(encoding='utf-8'), 'compile failed\n')
 
+    def test_binary_cache_collision_retries_once_and_preserves_logs(self):
+        message = "Could not resolve package dependencies: binary target Cordova /Library/Caches/org.swift.swiftpm/artifacts/item already exists in file system"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def run(command, log, env):
+                log.write_text(message if log.name == 'xcodebuild.log' else 'archive succeeded', encoding='utf-8')
+                if log.name == 'xcodebuild.log':
+                    raise subprocess.CalledProcessError(74, command)
+            with patch.object(packaging, 'run_logged', side_effect=run) as runner:
+                packaging.archive_with_cache_retry(root, {})
+                self.assertEqual(runner.call_count, 2)
+                self.assertEqual(runner.call_args_list[0].args[0], runner.call_args_list[1].args[0])
+            self.assertEqual((root / 'xcodebuild.log').read_text(encoding='utf-8'), message)
+            self.assertEqual((root / 'xcodebuild-retry.log').read_text(encoding='utf-8'), 'archive succeeded')
+
+    def test_other_archive_errors_are_not_retried(self):
+        for code, message in [(65, 'compile failed'), (74, 'Could not resolve package dependencies: checksum mismatch')]:
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'xcodebuild.log').write_text(message, encoding='utf-8')
+                with patch.object(packaging, 'run_logged', side_effect=subprocess.CalledProcessError(code, ['xcodebuild'])) as runner:
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        packaging.archive_with_cache_retry(root, {})
+                    self.assertEqual(runner.call_count, 1)
+
+    def test_repeated_cache_collision_still_fails(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'xcodebuild.log').write_text('Could not resolve package dependencies: binary target /org.swift.swiftpm/artifacts/item already exists in file system', encoding='utf-8')
+            with patch.object(packaging, 'run_logged', side_effect=subprocess.CalledProcessError(74, ['xcodebuild'])) as runner:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    packaging.archive_with_cache_retry(root, {})
+                self.assertEqual(runner.call_count, 2)
+
     def make_ipa(self, path, executable_mode=0o100755, omit=None):
         with zipfile.ZipFile(path, 'w') as archive:
             for filename in ['Info.plist', 'App', 'public/index.html', 'PrivacyInfo.xcprivacy', 'capacitor.config.json']:

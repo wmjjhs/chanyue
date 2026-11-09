@@ -80,6 +80,22 @@ def run_logged(command, log, env):
         raise subprocess.CalledProcessError(result, command)
 
 
+def archive_with_cache_retry(build_root, env):
+    command = archive_command(build_root)
+    log = build_root / 'xcodebuild.log'
+    try:
+        run_logged(command, log, env)
+    except subprocess.CalledProcessError as error:
+        output = log.read_text(encoding='utf-8')
+        if error.returncode != 74 or not all(marker in output for marker in [
+            'Could not resolve package dependencies', 'org.swift.swiftpm/artifacts/',
+            'already exists in file system', 'binary target',
+        ]):
+            raise
+        print('SwiftPM 二进制缓存写入冲突；保留缓存与首次日志，在同一构建机串行重试一次。', flush=True)
+        run_logged(command, build_root / 'xcodebuild-retry.log', env)
+
+
 def check_compiled_app(app):
     info = plistlib.loads((app / 'Info.plist').read_bytes())
     if info.get('CFBundleSupportedPlatforms') != ['iPhoneOS']:
@@ -136,7 +152,7 @@ def build():
     work = ROOT / 'artifacts/ios-build'
     work.mkdir(parents=True, exist_ok=True)
     build_root = Path(tempfile.mkdtemp(prefix='run-', dir=work))
-    run_logged(archive_command(build_root), build_root / 'xcodebuild.log', env)
+    archive_with_cache_retry(build_root, env)
     app = build_root / 'Chanyue.xcarchive/Products/Applications/App.app'
     check_compiled_app(app)
     payload = build_root / 'Payload'
