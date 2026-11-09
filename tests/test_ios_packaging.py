@@ -22,6 +22,7 @@ class IOSPackagingTests(unittest.TestCase):
         self.assertNotIn('-allowProvisioningUpdates', command)
         self.assertNotIn('-exportArchive', command)
         self.assertEqual(command[command.index('-scheme') + 1], 'App')
+        self.assertEqual(command[command.index('-packageCachePath') + 1], str(Path('artifacts/test-build/PackageCache')))
 
     def test_selects_installed_stable_xcode_26_only(self):
         with tempfile.TemporaryDirectory() as temporary:

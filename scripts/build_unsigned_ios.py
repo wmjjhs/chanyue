@@ -62,6 +62,7 @@ def archive_command(build_root):
         '-archivePath', str(build_root / 'Chanyue.xcarchive'),
         '-derivedDataPath', str(build_root / 'DerivedData'),
         '-clonedSourcePackagesDirPath', str(build_root / 'SourcePackages'),
+        '-packageCachePath', str(build_root / 'PackageCache'),
         'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO',
         'CODE_SIGN_IDENTITY=', 'DEVELOPMENT_TEAM=',
         'ARCHS=arm64', 'ONLY_ACTIVE_ARCH=NO', 'archive',
