@@ -4,8 +4,8 @@ import { applyPronunciation, validatePronunciationRules, type PronunciationRule 
 
 export interface SpeechDriver {
   prepare(): Promise<void>;
-  /** started 在真实发声第一帧触发；神经语音会带回这段音频的实际秒数。 */
-  speak(text: string, rate: number, started: (seconds?: number) => void, next?: string): Promise<void>;
+  /** started 在真实发声第一帧触发；神经语音会带回这段音频的实际秒数。next 为后续一个或多个片段，供原生侧提前合成。 */
+  speak(text: string, rate: number, started: (seconds?: number) => void, next?: string | string[]): Promise<void>;
   stop(): Promise<void>;
 }
 export type SpeechOptions = {
@@ -20,7 +20,7 @@ export const emptySpeechAvailability: SpeechAvailability = { available: false, n
 
 type SpeechPlugin = {
   prepare(): Promise<Partial<SpeechAvailability> | undefined>;
-  speak(options: { text: string; next: string; rate: number; id: string; engine: 'system' | 'neural'; voice: string }): Promise<void>;
+  speak(options: { text: string; next: string; queue: string[]; rate: number; id: string; engine: 'system' | 'neural'; voice: string }): Promise<void>;
   stop(): Promise<void>;
   addListener(name: 'speechStarted', callback: (event: { id: string; duration?: number }) => void): Promise<PluginListenerHandle>;
 };
@@ -68,12 +68,17 @@ export function createSystemSpeech(getOptions: () => SpeechOptions = () => defau
       neuralAvailable = result?.neural === true;
       if (result?.available !== true && !neuralAvailable) throw new Error('没有可用的离线中文语音。请在手机系统文字转语音设置中安装中文语音后重试。');
     },
-    async speak(text, rate, started, next = '') {
+    async speak(text, rate, started, next: string | string[] = []) {
       const options = getOptions();
       const engine = options.engine === 'neural' && neuralAvailable ? 'neural' : 'system';
       const rules = validatePronunciationRules(options.rules);
       const spoken = applyPronunciation(text, rules);
-      const spokenNext = engine === 'neural' ? applyPronunciation(next, rules) : '';
+      const upcoming = typeof next === 'string' ? (next ? [next] : []) : next;
+      // 多段后续文本交给原生侧排队预合成，连续短句时音频已提前备好。
+      const queue = engine === 'neural'
+        ? upcoming.map(value => applyPronunciation(value, rules)).filter(value => value.length > 0 && value.length <= 1000).slice(0, 4)
+        : [];
+      const spokenNext = queue[0] ?? '';
       const id = `speech-${Date.now()}-${++sequence}`, token = generation;
       const handle = await plugin.addListener('speechStarted', event => {
         if (event.id !== id || token !== generation) return;
@@ -84,7 +89,7 @@ export function createSystemSpeech(getOptions: () => SpeechOptions = () => defau
       try {
         if (token !== generation) throw new Error('听书已暂停。');
         await Promise.race([
-          plugin.speak({ text: spoken, next: spokenNext, rate, id, engine, voice: options.voice }),
+          plugin.speak({ text: spoken, next: spokenNext, queue, rate, id, engine, voice: options.voice }),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(() => reject(new Error('语音合成超时，请重试或改用系统语音。')), 15 * 60 * 1000);
           }),

@@ -9,8 +9,8 @@ import { createBackup, encodeBackup, parseBackup, planRestore } from './backup';
 const deferred = () => { let resolve!: () => void, reject!: (error: Error) => void; const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 function setup(text = '第一句。第二句。第三句。') {
-  const calls: { text: string; next: string; rate: number; started: (seconds?: number) => void; done: ReturnType<typeof deferred> }[] = [];
-  const driver: SpeechDriver = { prepare: vi.fn(async () => {}), stop: vi.fn(async () => {}), speak: vi.fn((text, rate, started, next) => { const done = deferred(); calls.push({ text, next: next ?? '', rate, started, done }); return done.promise; }) };
+  const calls: { text: string; next: string[]; rate: number; started: (seconds?: number) => void; done: ReturnType<typeof deferred> }[] = [];
+  const driver: SpeechDriver = { prepare: vi.fn(async () => {}), stop: vi.fn(async () => {}), speak: vi.fn((text, rate, started, next) => { const done = deferred(); calls.push({ text, next: Array.isArray(next) ? next : next ? [next] : [], rate, started, done }); return done.promise; }) };
   const save = vi.fn(async () => {});
   const controller = new SentenceListening(text, driver, { source: 0, completed: false, rate: 1 }, save);
   return { controller, calls, driver, save };
@@ -72,11 +72,11 @@ describe('系统听书按句控制器', () => {
   });
   it('朗读当前句时预取下一句，末句不预取', async () => {
     const { controller: c, calls } = setup(); const run = c.start(); await flush();
-    expect(calls[0]).toMatchObject({ text: '第一句。', next: '第二句。' });
+    expect(calls[0]).toMatchObject({ text: '第一句。', next: ['第二句。', '第三句。'] });
     calls[0].done.resolve(); await flush();
-    expect(calls[1]).toMatchObject({ text: '第二句。', next: '第三句。' });
+    expect(calls[1]).toMatchObject({ text: '第二句。', next: ['第三句。'] });
     calls[1].done.resolve(); await flush();
-    expect(calls[2]).toMatchObject({ text: '第三句。', next: '' });
+    expect(calls[2]).toMatchObject({ text: '第三句。', next: [] });
     calls[2].done.resolve(); await run;
   });
   it('暂停后旧回调不能推进，继续从当前句重读', async () => {

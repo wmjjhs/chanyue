@@ -24,6 +24,8 @@ const pathFor = (id: string) => {
   return `${root}/${id}.json`;
 };
 const positionKey = (id: string) => `chanyue-position:${id}`;
+// 正文长度只随导入/替换变化。缓存后听书每句保存位置无需重新读取并解析整本书。
+const bookLengths = new Map<string, number>();
 
 function parseBook(data: string, id: string): Book {
   const value: unknown = JSON.parse(data);
@@ -34,7 +36,9 @@ function parseBook(data: string, id: string): Book {
     book.lines.some(line => typeof line !== 'string') || !Number.isFinite(book.createdAt) || !Number.isInteger(book.cover)) {
     throw new Error('书籍数据已损坏。');
   }
-  return { ...book, ...validateBookState(book, textLength(book.lines)), typography: validateTypography(book.typography, textLength(book.lines)), contents: validateContents(book.contents, textLength(book.lines)) };
+  const length = textLength(book.lines);
+  bookLengths.set(id, length);
+  return { ...book, ...validateBookState(book, length), typography: validateTypography(book.typography, length), contents: validateContents(book.contents, length) };
 }
 
 function mergePosition(book: Book, position: Partial<Book>): Book {
@@ -51,6 +55,7 @@ function mergePosition(book: Book, position: Partial<Book>): Book {
 
 async function writeBook(book: Book) {
   await Filesystem.writeFile({ directory, path: pathFor(book.id), data: JSON.stringify(book), encoding: Encoding.UTF8, recursive: true });
+  bookLengths.set(book.id, textLength(book.lines));
 }
 
 async function readLibrary(): Promise<Book[]> {
@@ -147,17 +152,21 @@ export function saveNativePosition({ id, line, offset, character, completed, las
 export function saveNativeBookState(id: string, change: BookState): Promise<BookState> {
   pathFor(id);
   return serial(async () => {
-    const book = await readNoteBook(id), length = textLength(book.lines);
     const saved = (await Preferences.get({ key: positionKey(id) })).value;
-    const previous = saved ? JSON.parse(saved) : { line: book.line, offset: book.offset, character: book.character, completed: book.completed, lastReadAt: book.lastReadAt };
-    const state = { ...validateBookState({ ...book, ...previous }, length), ...validateBookState(change, length) };
-    await Preferences.set({ key: positionKey(id), value: JSON.stringify({ ...previous, ...state }) });
+    const previous: Record<string, unknown> | null = saved ? JSON.parse(saved) : null;
+    // 已有位置记录时不再读整本正文：听书每句都要保存一次，读大书会在句间造成明显等待。
+    const book = previous !== null && bookLengths.has(id) ? null : await readNoteBook(id);
+    const length = bookLengths.get(id) ?? (book ? textLength(book.lines) : 0);
+    const base = (book ?? previous ?? {}) as Record<string, unknown>;
+    const state = { ...validateBookState({ ...base, ...(previous ?? {}) }, length), ...validateBookState(change, length) };
+    await Preferences.set({ key: positionKey(id), value: JSON.stringify({ ...(previous ?? {}), ...state }) });
     return state;
   });
 }
 
 export function deleteNativeBook(id: string) {
   return serial(async () => {
+    bookLengths.delete(id);
     const path = pathFor(id);
     const names = new Set((await Filesystem.readdir({ directory, path: root })).files.map(file => file.name));
     await Filesystem.deleteFile({ directory, path });

@@ -84,16 +84,22 @@ export class SentenceListening {
         if (epoch !== this.epoch) return;
         const range = this.sentences[index];
         const next = { source: range.start, completed: false, rate: this.state.rate };
+        // 位置保存必须在发声前确认成功；存储层已去掉整本书读取，句界只剩轻量写入。
         await this.persist(next);
         if (epoch !== this.epoch) return;
         this.update({ ...next, focus: range.start, speaking: false, duration: 0, spokenEnd: range.end });
         const chunks = speechChunks(this.text, range);
-        const followingSentence = this.sentences[index + 1];
-        const upcoming = followingSentence ? speechChunks(this.text, followingSentence)[0] : undefined;
         for (let position = 0; position < chunks.length; position++) {
           if (epoch !== this.epoch) return;
           const chunk = chunks[position];
-          const following = chunks[position + 1] ?? upcoming;
+          // 把后续若干片段一起交给原生侧预取，连续短句也能提前备好音频。
+          const upcoming: string[] = [];
+          for (let s = index, first = position + 1; s < this.sentences.length && upcoming.length < 4; s++) {
+            const parts = speechChunks(this.text, this.sentences[s]);
+            for (let p = s === index ? first : 0; p < parts.length && upcoming.length < 4; p++) {
+              upcoming.push(this.text.slice(parts[p].start, parts[p].end));
+            }
+          }
           await this.driver.speak(
             this.text.slice(chunk.start, chunk.end),
             this.state.rate,
@@ -103,8 +109,9 @@ export class SentenceListening {
               this.startedId++;
               this.update({ speaking: true, focus: chunk.start, duration, spokenEnd: chunk.end, startedId: this.startedId });
             },
-            following ? this.text.slice(following.start, following.end) : '',
+            upcoming,
           );
+          if (epoch !== this.epoch) return;
         }
       }
       if (epoch !== this.epoch) return;

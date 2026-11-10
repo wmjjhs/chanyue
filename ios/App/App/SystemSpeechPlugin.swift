@@ -68,7 +68,18 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
     private let synthesizer = AVSpeechSynthesizer()
     private let neuralQueue = DispatchQueue(label: "app.chanyue.reader.neural-tts", qos: .userInitiated)
     private let cacheLock = NSLock()
-    private var cachedSpeech: (key: String, data: Data)?
+    // 多条目预取缓存：连续短句也能提前备好音频，不会被单槽缓存互相覆盖。
+    private var cachedSpeech: [String: Data] = [:]
+    private var cacheOrder: [String] = []
+    private var cacheBytes = 0
+    private let cacheItemLimit = 6
+    private let cacheByteLimit = 24 * 1024 * 1024
+    // 同一段文字只合成一次：预取中的任务被真正请求时插到队首并认领结果，不再重复排队等待。
+    private var jobs: [String] = []
+    private var jobParams: [String: (text: String, rate: Double)] = [:]
+    private var waiters: [String: [(Data?) -> Void]] = [:]
+    private var inFlight: Set<String> = []
+    private var workerBusy = false
     private var sessionActive = false
     private var pending: CAPPluginCall?
     private var current: AVSpeechUtterance?
@@ -164,11 +175,18 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
             }
             let engine = call.getString("engine") ?? "system"
             let requested = call.getString("voice") ?? ""
-            let upcoming = call.getString("next") ?? ""
             #if canImport(SherpaOnnx)
             if engine == "neural" && LocalNeuralTts.available() {
+                var queue = Array((call.getArray("queue") ?? [])
+                    .compactMap { $0 as? String }
+                    .filter { !$0.isEmpty && $0.utf16.count <= 1000 }
+                    .prefix(4))
+                if queue.isEmpty {
+                    let upcoming = call.getString("next") ?? ""
+                    if !upcoming.isEmpty, upcoming.utf16.count <= 1000 { queue = [upcoming] }
+                }
                 self.speakWithNeural(text: text, rate: rate, id: id, voice: requested,
-                                     next: upcoming.utf16.count <= 1000 ? upcoming : "", call: call)
+                                     queue: queue, call: call)
                 return
             }
             #endif
@@ -195,16 +213,24 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         "\(voice)|\(rate)|\(text)"
     }
 
-    private func cachedData(_ key: String) -> Data? {
+    private func cacheGet(_ key: String) -> Data? {
         cacheLock.lock()
         defer { cacheLock.unlock() }
-        return cachedSpeech?.key == key ? cachedSpeech?.data : nil
+        return cachedSpeech[key]
     }
 
-    private func storeData(_ data: Data, _ key: String) {
+    private func cachePut(_ data: Data, _ key: String) {
         cacheLock.lock()
-        cachedSpeech = (key, data)
-        cacheLock.unlock()
+        defer { cacheLock.unlock() }
+        guard cachedSpeech[key] == nil else { return }
+        cachedSpeech[key] = data
+        cacheOrder.append(key)
+        cacheBytes += data.count
+        while cacheOrder.count > cacheItemLimit || cacheBytes > cacheByteLimit {
+            guard !cacheOrder.isEmpty else { break }
+            let oldest = cacheOrder.removeFirst()
+            if let removed = cachedSpeech.removeValue(forKey: oldest) { cacheBytes -= removed.count }
+        }
     }
 
     // 官方 WAV 写出后立刻读入内存并删掉临时文件，播放时不再碰磁盘。
@@ -220,44 +246,80 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         return data
     }
 
-    // 播放当前句的同时合成下一句，句间只剩切换播放器，不再等待模型计算。
-    private func prefetch(_ text: String, rate: Double, voice: String) {
-        guard !text.isEmpty, text.utf16.count <= 1000 else { return }
-        let key = cacheKey(text, rate, voice)
-        guard cachedData(key) == nil else { return }
-        neuralQueue.async {
-            guard self.cachedData(key) == nil, let data = self.wavData(text, rate: rate) else { return }
-            self.storeData(data, key)
+    // 只从主线程调用：命中缓存时同步回调，未命中时排队并在合成完成后回到主线程回调。
+    private func requestAudio(key: String, text: String, rate: Double, priority: Bool,
+                              completion: ((Data?) -> Void)?) {
+        cacheLock.lock()
+        if let data = cachedSpeech[key] {
+            cacheLock.unlock()
+            completion?(data)
+            return
         }
+        if let waiter = completion { waiters[key, default: []].append(waiter) }
+        if jobParams[key] == nil && !inFlight.contains(key) {
+            jobParams[key] = (text, rate)
+            if priority { jobs.insert(key, at: 0) } else { jobs.append(key) }
+        } else if priority, let index = jobs.firstIndex(of: key), index > 0 {
+            jobs.remove(at: index)
+            jobs.insert(key, at: 0)
+        }
+        let start = !workerBusy
+        if start { workerBusy = true }
+        cacheLock.unlock()
+        if start { neuralQueue.async { self.runNextJob() } }
     }
 
-    private func speakWithNeural(text: String, rate: Double, id: String, voice: String, next: String, call: CAPPluginCall) {
+    private func runNextJob() {
+        cacheLock.lock()
+        guard let key = jobs.first else {
+            workerBusy = false
+            cacheLock.unlock()
+            return
+        }
+        jobs.removeFirst()
+        let params = jobParams.removeValue(forKey: key)
+        inFlight.insert(key)
+        cacheLock.unlock()
+
+        let data = cacheGet(key) ?? params.flatMap { self.wavData($0.text, rate: $0.rate) }
+        if let data { cachePut(data, key) }
+
+        cacheLock.lock()
+        inFlight.remove(key)
+        let callbacks = waiters.removeValue(forKey: key) ?? []
+        cacheLock.unlock()
+        if !callbacks.isEmpty {
+            DispatchQueue.main.async {
+                for callback in callbacks { callback(data) }
+            }
+        }
+        neuralQueue.async { self.runNextJob() }
+    }
+
+    // 当前句优先出队，其后若干片段顺序预取；句末切换时音频已备好，不再等待模型计算。
+    private func speakWithNeural(text: String, rate: Double, id: String, voice: String,
+                                 queue: [String], call: CAPPluginCall) {
         self.cancel("听书已暂停。", keepSession: true)
         self.neuralCall = call; self.neuralID = id
         self.neuralToken += 1
         let token = self.neuralToken
         let key = self.cacheKey(text, rate, voice)
-        if let data = self.cachedData(key) {
-            self.playNeural(data, id: id, call: call)
-            self.prefetch(next, rate: rate, voice: voice)
-            return
-        }
-        neuralQueue.async {
-            let data = self.cachedData(key) ?? self.wavData(text, rate: rate)
-            guard let data else {
-                DispatchQueue.main.async { self.finishNeural(id: id, call: call, error: "本地神经语音合成失败，请在设置中改用系统语音。") }
+        self.requestAudio(key: key, text: text, rate: rate, priority: true) { [weak self] data in
+            guard let self = self else { return }
+            guard self.neuralToken == token, self.neuralID == id,
+                  UIApplication.shared.applicationState == .active else {
+                self.finishNeural(id: id, call: call, error: "听书已暂停。")
                 return
             }
-            self.storeData(data, key)
-            DispatchQueue.main.async {
-                guard self.neuralToken == token, self.neuralID == id,
-                      UIApplication.shared.applicationState == .active else {
-                    self.finishNeural(id: id, call: call, error: "听书已暂停。")
-                    return
-                }
-                self.playNeural(data, id: id, call: call)
-                self.prefetch(next, rate: rate, voice: voice)
+            guard let data else {
+                self.finishNeural(id: id, call: call, error: "本地神经语音合成失败，请在设置中改用系统语音。")
+                return
             }
+            self.playNeural(data, id: id, call: call)
+        }
+        for upcoming in queue {
+            let upcomingKey = self.cacheKey(upcoming, rate, voice)
+            self.requestAudio(key: upcomingKey, text: upcoming, rate: rate, priority: false, completion: nil)
         }
     }
 
