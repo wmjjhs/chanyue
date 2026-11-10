@@ -15,7 +15,8 @@ import { RecitationPanel } from './RecitationPanel';
 import { fixedPracticeUnits } from './practice-layout';
 import { preferencesFor, type BookState, type ReadingPreference } from './book-state';
 import { SentenceListening } from './listening';
-import { createSystemSpeech } from './system-speech';
+import { createSystemSpeech, type SpeechOptions } from './system-speech';
+import { parsePronunciationRules } from './speech-text';
 
 export type ReadingPosition = Pick<Book, 'line' | 'offset' | 'character' | 'completed'>;
 type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: () => void; onProgress: (position: ReadingPosition) => void; blocked: boolean; onBookState: (state: BookState) => Promise<void> };
@@ -27,7 +28,11 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const listening = book.readingPreference?.mode === 'listening';
   const listeningRef = useRef(listening); listeningRef.current = listening;
   const saveListening = useRef(onBookState); saveListening.current = onBookState;
-  const [speech] = useState(() => new SentenceListening(book.lines.join('\n'), createSystemSpeech(), book.listening ?? { source: sentences[Math.max(0, sentenceIndex(sentences, book.character ?? 0))]?.start ?? 0, completed: false, rate: 1 }, state => saveListening.current({ listening: state })));
+  const speechOptions = useMemo<SpeechOptions>(() => ({
+    engine: settings.speechEngine, voice: settings.speechVoice, rules: parsePronunciationRules(settings.speechRules),
+  }), [settings.speechEngine, settings.speechVoice, settings.speechRules]);
+  const speechOptionsRef = useRef(speechOptions); speechOptionsRef.current = speechOptions;
+  const [speech] = useState(() => new SentenceListening(book.lines.join('\n'), createSystemSpeech(() => speechOptionsRef.current), book.listening ?? { source: sentences[Math.max(0, sentenceIndex(sentences, book.character ?? 0))]?.start ?? 0, completed: false, rate: 1 }, state => saveListening.current({ listening: state })));
   const speechState = useSyncExternalStore(speech.subscribe, speech.getSnapshot);
   const [practiceSource, setPracticeSource] = useState<number | null>(() => book.readingPreference?.mode === 'practice' ? book.practice?.source ?? sourcePosition(documentModel, initialPosition(book, documentModel)) : null);
   const [focused, setFocused] = useState(false);
@@ -299,7 +304,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     </main>
     <div className="reading-under v2-controls" hidden={focused}>
       <div className="line-counter sr-only" ref={counter} aria-live={playing ? 'off' : 'polite'} />
-      {listening && <p className="listening-status" role="status">{speechState.active ? speechState.speaking ? '正在听书 · 按句同步' : '正在准备系统语音…' : speechState.completed ? '本书已听完' : '系统听书 · 暂停后从当前句重读'}</p>}
+      {listening && <p className="listening-status" role="status">{speechState.active ? speechState.speaking ? '正在听书 · 按句同步' : '正在准备语音…' : speechState.completed ? '本书已听完' : '听书 · 暂停后从当前句重读'}</p>}
       <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label={listening || settings.sentenceMode ? '回退一句' : '后退一页'} onClick={() => step(-1)}><SkipBack size={21} /><span>{listening || settings.sentenceMode ? '回退一句' : '后退一页'}</span></button><button className="play-button" disabled={!hasWords} aria-label={listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label={listening || settings.sentenceMode ? '前进一句' : '前进一页'} onClick={() => step(1)}><SkipForward size={21} /><span>{listening || settings.sentenceMode ? '前进一句' : '前进一页'}</span></button></div>
       <form className="page-navigation" aria-label="页码跳转" onSubmit={event => {
         event.preventDefault();

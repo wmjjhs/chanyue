@@ -15,6 +15,7 @@ import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
+import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -24,6 +25,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 @CapacitorPlugin(name = "SystemSpeech")
 public class SystemSpeechPlugin extends Plugin {
@@ -78,16 +80,43 @@ public class SystemSpeechPlugin extends Plugin {
         }));
     }
 
-    private Voice voice() {
-        if (!initialized || engine == null || engine.getVoices() == null) return null;
+    private int score(Voice voice) {
+        int value = "CN".equalsIgnoreCase(voice.getLocale().getCountry()) ? 40 : 10;
+        value += Math.min(400, Math.max(0, voice.getQuality())) / 5;
+        String name = voice.getName() == null ? "" : voice.getName().toLowerCase(Locale.ROOT);
+        if (name.contains("network")) value -= 100;
+        return value;
+    }
+    private List<Voice> voices() {
+        if (!initialized || engine == null || engine.getVoices() == null) return new ArrayList<>();
         return engine.getVoices().stream().filter(v -> "zh".equals(v.getLocale().getLanguage())
             && !v.isNetworkConnectionRequired()
             && (v.getFeatures() == null || !v.getFeatures().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED)))
-            .sorted(Comparator.comparing((Voice v) -> !Locale.SIMPLIFIED_CHINESE.getCountry().equals(v.getLocale().getCountry()))
-                .thenComparing(Voice::getName)).findFirst().orElse(null);
+            .sorted(Comparator.comparingInt((Voice v) -> -score(v)).thenComparing(Voice::getName))
+            .collect(Collectors.toList());
+    }
+    private Voice selectedVoice(String requested) {
+        List<Voice> list = voices();
+        if (list.isEmpty()) return null;
+        if (requested != null && requested.length() <= 120) {
+            for (Voice voice : list) if (requested.equals(voice.getName())) return voice;
+        }
+        return list.get(0);
     }
     private void respond(PluginCall call) {
-        JSObject result = new JSObject(); result.put("available", voice() != null); call.resolve(result);
+        List<Voice> list = voices();
+        JSArray options = new JSArray();
+        for (Voice voice : list.subList(0, Math.min(24, list.size()))) {
+            JSObject option = new JSObject();
+            option.put("id", voice.getName());
+            option.put("name", voice.getName());
+            options.put(option);
+        }
+        JSObject result = new JSObject();
+        result.put("available", !list.isEmpty());
+        result.put("neural", false);
+        result.put("voices", options);
+        call.resolve(result);
     }
     @PluginMethod public void prepare(PluginCall call) {
         main.post(() -> {
@@ -105,7 +134,7 @@ public class SystemSpeechPlugin extends Plugin {
             if (text == null || text.isEmpty() || text.length() > 1000 || id == null || !id.matches("speech-[0-9]+-[0-9]+") || rate == null || !Double.isFinite(rate) || rate < 0.5 || rate > 2) {
                 call.reject("朗读参数无效。"); return;
             }
-            Voice selected = voice();
+            Voice selected = selectedVoice(call.getString("voice"));
             if (selected == null) { call.reject("没有可用的离线中文语音，请安装中文语音包后重试。"); return; }
             stopCurrent("听书已暂停。");
             if (engine.setVoice(selected) != TextToSpeech.SUCCESS || engine.setSpeechRate(rate.floatValue()) != TextToSpeech.SUCCESS) { call.reject("无法设置系统语音。"); return; }

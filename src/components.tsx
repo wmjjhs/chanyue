@@ -1,7 +1,9 @@
 // 版权所有：波哥
-import { useEffect, useId, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { ambientAudio, ambientNames } from './ambient-audio';
 import { trailOpacity } from './trail-fade';
+import { speechVoices, emptySpeechAvailability, type SpeechAvailability } from './system-speech';
+import { parsePronunciationRules, MAX_PRONUNCIATION_RULES } from './speech-text';
 import { BookOpen, X, RotateCcw, Check, Smartphone, ShieldCheck, MoveHorizontal, Download, HardDrive } from 'lucide-react';
 import { defaultSettings, validateSettings, fonts, MAX_READING_SPEED, MAX_CURSOR_WORDS, MAX_CURSOR_THICKNESS, MAX_VISIBLE_LINES, MIN_FONT_SIZE, MIN_CURSOR_ROW, themes, type Book, type Settings } from './model';
 import { Capacitor } from '@capacitor/core';
@@ -49,6 +51,15 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
   settings: Settings; onChange: (settings: Settings) => void; onClose: () => void; bookSpecific?: boolean;
 }) {
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange(validateSettings({ ...settings, [key]: value }));
+  const [availability, setAvailability] = useState<SpeechAvailability>(emptySpeechAvailability);
+  useEffect(() => {
+    let alive = true;
+    void speechVoices().then(value => { if (alive) setAvailability(value); });
+    return () => { alive = false; };
+  }, []);
+  const neuralReady = availability.neural;
+  const missingVoice = Boolean(settings.speechVoice) && !availability.voices.some(voice => voice.id === settings.speechVoice);
+  const ruleCount = parsePronunciationRules(settings.speechRules).length;
   const updateRangeFill = (input: HTMLInputElement | null) => {
     if (!input) return;
     const min = Number(input.min), max = Number(input.max);
@@ -155,6 +166,28 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <p className="ambient-status field-note" role="status" data-audio-state={audioState}>{settings.ambientEnabled ? audioMessages[audioState] : '环境音已关闭'}</p>
       <p className="field-note">已选真实自然录音，随应用离线提供并平滑循环。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>
       <details className="field-note"><summary>录音来源与授权</summary><p>柔雨：soundrecorder7（Freesound 167034）；微风：o_ciz（475448）；流水：BurghRecords（446019）。均为 CC0 1.0。使用作者公开高质量预览，非原始无损录音；保持原双声道，雨声左右相同，未人工扩宽。来源及处理记录随项目保存。</p></details>
+    </section>
+    <section className="settings-section speech-settings">
+      <h3>听书朗读</h3>
+      <label className="speech-field" htmlFor="speech-engine">朗读引擎
+        <select id="speech-engine" value={settings.speechEngine} onChange={event => set('speechEngine', event.target.value === 'neural' ? 'neural' : 'system')}>
+          <option value="system">系统语音 · 轻量、响应快</option>
+          <option value="neural" disabled={!neuralReady}>本地神经语音 · 更自然</option>
+        </select>
+      </label>
+      <label className="speech-field" htmlFor="speech-voice">音色
+        <select id="speech-voice" value={settings.speechVoice} onChange={event => set('speechVoice', event.target.value)}>
+          <option value="">自动优选高质量中文音色</option>
+          {missingVoice && <option value={settings.speechVoice}>上次使用（此设备不可用）</option>}
+          {availability.voices.map(voice => <option key={voice.id} value={voice.id}>{voice.name}</option>)}
+        </select>
+      </label>
+      <label className="speech-field" htmlFor="speech-rules">自定义读音 <span className="field-note">每行一条：原词=读法</span></label>
+      <textarea id="speech-rules" rows={3} maxLength={4000} spellCheck={false} value={settings.speechRules} onChange={event => set('speechRules', event.target.value)} placeholder={'般若=波惹\n南无=那摩'} />
+      <p className="field-note">已启用 {ruleCount} / {MAX_PRONUNCIATION_RULES} 条自定义规则。只调整朗读用字，前后字数必须相同；不改原文、显示、排版和阅读进度。禅宗术语与常见多音词已有内置读音，自定义规则可覆盖。</p>
+      <p className="field-note">系统语音优先选设备已下载的高质量中文音色；本地神经语音随安装包内置，首次朗读需要加载模型，长句合成可能等待数秒。两种引擎都在手机本地合成，正文不上传、不调用云端服务；神经语音不可用时自动回退系统语音。</p>
+      {settings.speechEngine === 'neural' && !neuralReady && <p className="field-note">当前安装包未提供本地神经语音模型，听书将自动使用系统语音。</p>}
+      {!availability.available && !neuralReady && <p className="field-note">当前设备尚未检测到离线中文语音，可在手机系统「文字转语音」设置中下载中文语音包。</p>}
     </section>
     <footer className="modal-footer"><button className="text-button" onClick={() => onChange({ ...defaultSettings })}><RotateCcw size={15} />恢复默认</button><button className="primary-button" onClick={onClose}>完成设置 <Check size={16} /></button></footer>
   </Modal>;

@@ -83,13 +83,30 @@ class IOSPackagingTests(unittest.TestCase):
 
     def make_ipa(self, path, executable_mode=0o100755, omit=None):
         with zipfile.ZipFile(path, 'w') as archive:
-            for filename in ['Info.plist', 'App', 'public/index.html', 'PrivacyInfo.xcprivacy', 'capacitor.config.json']:
+            files = ['Info.plist', 'App', 'public/index.html', 'PrivacyInfo.xcprivacy', 'capacitor.config.json']
+            files += [f'tts/{name}' for name in packaging.NEURAL_MODEL_FILES]
+            for filename in files:
                 if filename == omit:
                     continue
                 entry = zipfile.ZipInfo(f'Payload/App.app/{filename}')
                 entry.create_system = 3
                 entry.external_attr = (executable_mode if filename == 'App' else 0o100644) << 16
                 archive.writestr(entry, b'packaging test fixture, not an iOS executable')
+
+    def test_ipa_requires_neural_voice_model(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            ipa = Path(temporary) / 'test.ipa'
+            self.make_ipa(ipa, omit='tts/model.onnx')
+            with self.assertRaisesRegex(RuntimeError, '神经语音模型'):
+                packaging.verify_ipa(ipa)
+
+    def test_model_bundle_rejects_incomplete_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in packaging.NEURAL_MODEL_FILES:
+                (root / name).write_bytes(b'model')
+            with self.assertRaisesRegex(RuntimeError, '不完整'):
+                packaging.check_model(root)
 
     def test_ipa_layout_and_executable_permissions(self):
         with tempfile.TemporaryDirectory() as temporary:

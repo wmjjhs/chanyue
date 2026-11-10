@@ -21,7 +21,7 @@ jobs:
   build:
     if: ${{ github.event.repository.private == false && inputs.confirm_public_build == true }}
     runs-on: macos-15-intel
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       CI: 'true'
       PYTHONUNBUFFERED: '1'
@@ -58,6 +58,9 @@ jobs:
           npm test
           python3 -m unittest discover -s tests -p test_ios_packaging.py -v
           python3 -m unittest discover -s tests -p test_ambience_assets.py -v
+
+      - name: 下载并校验内置离线神经语音模型
+        run: python3 scripts/fetch_tts_model.py
 
       - name: 构建并同步完全离线资源
         run: npm run ios:sync

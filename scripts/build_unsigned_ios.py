@@ -14,6 +14,24 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT = Path('ios/App/App.xcodeproj')
 TARGET_ID = '504EC3031FED79650016851F'
+MODEL_DIR = ROOT / 'artifacts/tts-models/bundle/tts'
+NEURAL_MODEL_FILES = {
+    'model.onnx': 170429550,
+    'lexicon.txt': 6837671,
+    'tokens.txt': 655,
+    'date.fst': 59154,
+    'number.fst': 64482,
+    'LICENSE': 1053,
+    'README.md': 257,
+}
+
+
+def check_model(directory):
+    for name, size in NEURAL_MODEL_FILES.items():
+        path = directory / name
+        if not path.is_file() or path.stat().st_size != size:
+            raise RuntimeError(f'本地神经语音模型缺失或不完整：{name}')
+    print('PASS 离线神经语音模型文件与大小校验。', flush=True)
 
 
 def select_xcode(applications=Path('/Applications')):
@@ -35,6 +53,7 @@ def check_sources(root=ROOT):
         Path('ios/App/App/Info.plist'),
         Path('ios/App/App/PrivacyInfo.xcprivacy'),
         Path('ios/App/CapApp-SPM/Package.swift'),
+        Path('scripts/fetch_tts_model.py'),
         Path('public/apple-touch-icon.png'),
         Path('ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png'),
         Path('package-lock.json'),
@@ -125,6 +144,9 @@ def verify_ipa(path):
                      'Payload/App.app/capacitor.config.json']:
             if name not in names:
                 raise RuntimeError(f'IPA 缺少文件：{name}')
+        for name in NEURAL_MODEL_FILES:
+            if f'Payload/App.app/tts/{name}' not in names:
+                raise RuntimeError(f'IPA 缺少神经语音模型文件：{name}')
         if archive.testzip() is not None:
             raise RuntimeError('IPA 压缩包校验失败。')
         executable = archive.getinfo('Payload/App.app/App')
@@ -136,6 +158,7 @@ def build():
     if sys.platform != 'darwin':
         raise RuntimeError('iOS 编译只能在 macOS/Xcode 运行；Windows 请使用 GitHub Actions。')
     check_sources()
+    check_model(MODEL_DIR)
     env = dict(os.environ)
     env['DEVELOPER_DIR'] = str(select_xcode())
     version = subprocess.check_output(['xcodebuild', '-version'], env=env, text=True)
@@ -159,6 +182,8 @@ def build():
     payload = build_root / 'Payload'
     payload.mkdir()
     subprocess.run(['/usr/bin/ditto', str(app), str(payload / 'App.app')], check=True, env=env)
+    subprocess.run(['/usr/bin/ditto', str(MODEL_DIR), str(payload / 'App.app/tts')], check=True, env=env)
+    check_model(payload / 'App.app/tts')
     subprocess.run(['/usr/bin/ditto', '-c', '-k', '--sequesterRsrc', '--keepParent',
                     str(payload), str(destination)], check=True, env=env)
     verify_ipa(destination)

@@ -53,6 +53,9 @@ export type Settings = {
   ambientSound: 'rain' | 'wind' | 'stream';
   ambientVolume: number;
   ambientContinuePaused: boolean;
+  speechEngine: 'system' | 'neural';
+  speechVoice: string;
+  speechRules: string;
 };
 
 export const fonts = {
@@ -74,6 +77,7 @@ export const defaultSettings: Settings = {
   maxLines: 6, layoutMode: 'semantic', cursorColor: '#7b9259', cursorTransparent: false, cursorThickness: 2, cursorWords: 1, cursorMode: 'pointer', cursorRow: 2,
   trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4,
   ambientEnabled: false, ambientSound: 'rain', ambientVolume: 20, ambientContinuePaused: true,
+  speechEngine: 'system', speechVoice: '', speechRules: '',
 };
 
 export const themes = [
@@ -117,6 +121,9 @@ export function validateSettings(value: unknown): Settings {
     ambientSound: v.ambientSound === 'wind' || v.ambientSound === 'stream' ? v.ambientSound : 'rain',
     ambientVolume: Math.round(number(v.ambientVolume, 0, 100, defaultSettings.ambientVolume)),
     ambientContinuePaused: boolean(v.ambientContinuePaused, defaultSettings.ambientContinuePaused),
+    speechEngine: v.speechEngine === 'neural' ? 'neural' : 'system',
+    speechVoice: typeof v.speechVoice === 'string' && /^[\p{L}\p{N}._\- ]{0,120}$/u.test(v.speechVoice) ? v.speechVoice : '',
+    speechRules: typeof v.speechRules === 'string' && v.speechRules.length <= 4000 ? v.speechRules : '',
   };
 }
 
