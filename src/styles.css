@@ -486,8 +486,6 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 }
 @supports not (background: color-mix(in srgb, white, black)) { .focus-restore { background: var(--reader-button-text); border: 1px solid currentColor; } }
 @supports not selector(:focus-visible) { button:focus, input:focus, select:focus { outline: 2px solid #849576; } }
-.reading-glyph.is-spoken-sentence > span { background: #849b5733; border-bottom: 2px solid currentColor; border-radius: 2px; }
-.listening-status { margin: 0 0 5px; font-size: 11px; text-align: center; }
 .listening-error { position: absolute; top: 58px; left: 16px; right: 16px; z-index: 30; max-width: 560px; margin: auto; padding: 12px; border: 1px solid #aa7159; border-radius: 8px; background: #fff8ee; color: #633c27; font-size: 13px; }
 .listening-error button { display: block; margin-top: 8px; min-height: 40px; padding: 8px 14px; background: #e7eadc; color: #3f4a37; border-radius: 6px; }
 .listening-options { margin-top: 12px; font-size: 12px; }

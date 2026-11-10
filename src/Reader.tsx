@@ -41,6 +41,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   useEffect(() => { if (focused) revealControl.current?.focus({ preventScroll: true }); }, [focused]);
   const position = useRef(initialPosition(book, documentModel));
   const manualSource = useRef<number | null>(!book.completed && typeof book.character === 'number' && documentModel.wordOrdinal[floorIndex(documentModel.offsets, book.character)] < 0 ? book.character : null);
+  const listeningSpan = useRef<{ from: number; to: number; began: number; duration: number } | null>(null);
   const pageInput = useRef<HTMLInputElement>(null);
   const pageLabel = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -92,16 +93,16 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   const paint = useCallback(() => {
     const { motion: path, documentModel: doc, metrics: m, layout: lines } = latest.current;
     const frame = motionFrame(path, position.current);
-    const rowIndex = currentRow();
-    if (manualSource.current !== null && rowIndex !== frame.rowIndex) {
+    const rowIndex = listeningRef.current ? frame.rowIndex : currentRow();
+    if (!listeningRef.current && manualSource.current !== null && rowIndex !== frame.rowIndex) {
       frame.rowIndex = rowIndex; frame.y = rowIndex; frame.scroll = rowIndex;
       frame.x = lines.rows[rowIndex]?.columns[0] ?? 0;
       frame.width = 1; frame.span = 0; frame.inkX = frame.x;
     }
-    if (manualSource.current !== null) frame.completed = false;
+    if (!listeningRef.current && manualSource.current !== null) frame.completed = false;
     const pages = pagination(lines.rows.length, m.visibleLines, rowIndex);
     const spoken = speech.getSnapshot();
-    renderer.current?.paint(frame, listeningRef.current && !spoken.completed ? latest.current.sentences[sentenceIndex(latest.current.sentences, spoken.source)] : undefined);
+    renderer.current?.paint(frame);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
     if (band.current) {
       band.current.dataset.position = String(position.current);
@@ -117,7 +118,9 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       ? '已读完 · 愿这一刻的宁静，陪你走远一点'
       : `第 ${rowIndex + 1} 行 / 共 ${lines.rows.length} 行 · 第 ${word + 1} / ${doc.words.length} 字（不含标点）`;
     if (counter.current && counter.current.textContent !== label) counter.current.textContent = label;
-    const pageText = `第 ${pages.current} / ${pages.total} 页`;
+    const pageText = listeningRef.current
+      ? spoken.active ? spoken.speaking ? '正在听书 · 按句同步' : '正在准备语音…' : spoken.completed ? '本书已听完' : '听书 · 暂停后从当前句重读'
+      : `第 ${pages.current} / ${pages.total} 页`;
     if (pageLabel.current && pageLabel.current.textContent !== pageText) pageLabel.current.textContent = pageText;
     if (pageInput.current) pageInput.current.placeholder = String(pages.current || 1);
     const sentence = sentenceIndex(latest.current.sentences, manualSource.current ?? sourcePosition(doc, position.current));
@@ -145,11 +148,35 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   useLayoutEffect(() => { paint(); });
 
   useLayoutEffect(() => {
-    if (!listening) return;
-    position.current = speechState.completed ? documentModel.words.length : glyphPosition(documentModel, speechState.focus);
-    manualSource.current = speechState.completed ? null : speechState.focus;
-    setRunning(speechState.active); paint();
+    if (!listening) { listeningSpan.current = null; return; }
+    const spoken = speech.getSnapshot();
+    const { documentModel: doc, sentences: all } = latest.current;
+    const start = glyphPosition(doc, spoken.focus);
+    const sentence = all[sentenceIndex(all, spoken.focus)];
+    const end = sentence ? Math.max(start, glyphPosition(doc, sentence.end)) : start;
+    if (spoken.completed || position.current < start - 2 || position.current > start + 6) position.current = spoken.completed ? doc.words.length : start;
+    const rate = Math.max(0.5, Math.min(2, spoken.rate)) || 1;
+    const remaining = Math.max(0, end - position.current);
+    listeningSpan.current = { from: position.current, to: position.current + remaining, began: performance.now(), duration: Math.max(300, remaining / (3.2 * rate) * 1000) };
+    manualSource.current = spoken.completed ? null : spoken.focus;
+    setRunning(spoken.active); paint();
   }, [listening, speechState, documentModel, paint, setRunning]);
+
+  useEffect(() => {
+    if (!listening || !speechState.active || !speechState.speaking) return;
+    let animation = 0;
+    const tick = (now: number) => {
+      const span = listeningSpan.current;
+      if (!span) return;
+      const t = Math.min(1, Math.max(0, (now - span.began) / span.duration));
+      const next = span.from + (span.to - span.from) * t;
+      if (next > position.current) position.current = next;
+      paint();
+      if (t < 1) animation = requestAnimationFrame(tick);
+    };
+    animation = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(animation);
+  }, [listening, speechState.active, speechState.speaking, paint]);
 
   useEffect(() => {
     if (!playing || blocked || listening) return;
@@ -304,7 +331,6 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     </main>
     <div className="reading-under v2-controls" hidden={focused}>
       <div className="line-counter sr-only" ref={counter} aria-live={playing ? 'off' : 'polite'} />
-      {listening && <p className="listening-status" role="status">{speechState.active ? speechState.speaking ? '正在听书 · 按句同步' : '正在准备语音…' : speechState.completed ? '本书已听完' : '听书 · 暂停后从当前句重读'}</p>}
       <div className="reader-controls"><button className="step-button" ref={previousButton} aria-label={listening || settings.sentenceMode ? '回退一句' : '后退一页'} onClick={() => step(-1)}><SkipBack size={21} /><span>{listening || settings.sentenceMode ? '回退一句' : '后退一页'}</span></button><button className="play-button" disabled={!hasWords} aria-label={listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始'} onClick={toggle}>{playing ? <Pause size={21} fill="currentColor" /> : completed ? <RotateCcw size={21} /> : <Play size={21} fill="currentColor" />}<span>{listening ? speechState.active ? '暂停听书' : completed ? '重新听书' : '开始听书' : playing ? '停止' : completed ? '重新阅读' : settings.sentenceMode ? '开始本句' : '开始阅读'}</span></button><button className="step-button" ref={nextButton} aria-label={listening || settings.sentenceMode ? '前进一句' : '前进一页'} onClick={() => step(1)}><SkipForward size={21} /><span>{listening || settings.sentenceMode ? '前进一句' : '前进一页'}</span></button></div>
       <form className="page-navigation" aria-label="页码跳转" onSubmit={event => {
         event.preventDefault();
@@ -313,7 +339,7 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
         goToPage(input.valueAsNumber);
         input.blur();
       }}>
-        <span ref={pageLabel} aria-live={playing ? 'off' : 'polite'} />
+        <span ref={pageLabel} role="status" aria-live={playing && !listening ? 'off' : 'polite'} />
         <label htmlFor="reading-page" className="sr-only">跳转页码</label>
         <input id="reading-page" ref={pageInput} type="number" inputMode="numeric" enterKeyHint="go" min="1" max={pageCount || 1} step="1" required disabled={!pageCount} onFocus={pause} aria-label="跳转页码" />
         <button type="submit" aria-label="跳转" title="跳转到指定页" disabled={!pageCount}><CornerDownLeft size={16} /></button>

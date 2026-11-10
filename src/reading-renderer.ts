@@ -59,7 +59,7 @@ export class ReadingRenderer {
     return { element, cells, trail };
   }
 
-  paint(frame: ReturnType<typeof motionFrame>, sentence?: { start: number; end: number }) {
+  paint(frame: ReturnType<typeof motionFrame>) {
     const { metrics: m } = this;
     const anchor = m.cursorRow - 1;
     const first = Math.max(0, Math.floor(frame.scroll - anchor) - 1);
@@ -87,11 +87,9 @@ export class ReadingRenderer {
         row.trail.style.left = `${range.x * m.cellWidth}px`;
         row.trail.style.width = `${range.width * m.cellWidth}px`;
         row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, frame.rowElapsed * 60 / this.settings.speed));
-        row.trail.hidden = !!sentence || !this.document.words.length || range.width <= 0;
+        row.trail.hidden = !this.document.words.length || range.width <= 0;
       }
       for (const cell of row.cells) {
-        const source = this.document.offsets[cell.glyph];
-        cell.element.classList.toggle('is-spoken-sentence', !!sentence && source >= sentence.start && source < sentence.end);
         if (rowIndex === frame.rowIndex && this.document.wordOrdinal[cell.glyph] >= 0) {
           const pen = this.settings.cursorMode === 'trail' ? frame.inkX : frame.x + frame.width / 2;
           const width = this.document.scales[cell.glyph] * (this.document.bold[cell.glyph] ? 1.04 : 1);
@@ -105,7 +103,7 @@ export class ReadingRenderer {
       nearest?.classList.add('is-current');
       this.current = nearest;
     }
-    this.cursor.hidden = !!sentence || this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
+    this.cursor.hidden = this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
     this.cursor.style.width = `${frame.width * m.cellWidth}px`;
     this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(anchor + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
     this.cursor.dataset.phase = 'scan';

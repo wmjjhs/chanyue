@@ -59,6 +59,7 @@ def main():
                 upload(page,'听书样例.txt','第一句。第二句。第三句。'.encode());close_import(page)
                 page.get_by_role('button',name='阅读《听书样例》',exact=True).click()
                 reading=source(page)
+                reading_cursor=page.locator('.scan-cursor').evaluate('(e)=>[getComputedStyle(e).height,getComputedStyle(e).backgroundColor]')
                 open_tools(page);page.get_by_label('本书使用方式').select_option('listening')
                 expect(page.get_by_role('button',name='开始听书',exact=True)).to_be_visible()
                 page.evaluate('window.__noVoice=true');page.get_by_role('button',name='开始听书',exact=True).click()
@@ -66,10 +67,14 @@ def main():
                 assert page.evaluate('(window.__utterances||[]).length')==0
                 page.evaluate('window.__noVoice=false');page.get_by_role('button',name='重试听书',exact=True).click()
                 page.wait_for_function('window.__utterances.length===1')
-                expect(page.locator('.listening-status')).to_contain_text('准备')
-                page.evaluate('window.__ttsStart()');expect(page.locator('.listening-status')).to_contain_text('按句同步')
+                expect(page.locator('.page-navigation > span').first).to_contain_text('准备')
+                page.evaluate('window.__ttsStart()');expect(page.locator('.page-navigation > span').first).to_contain_text('按句同步')
                 first=source(page);page.wait_for_timeout(250);assert source(page)==first
-                assert page.locator('.is-spoken-sentence').count()>1
+                assert page.locator('.is-spoken-sentence').count()==0
+                cursor=page.locator('.scan-cursor');expect(cursor).to_be_visible()
+                assert cursor.evaluate('(e)=>[getComputedStyle(e).height,getComputedStyle(e).backgroundColor]')==reading_cursor
+                before=cursor.evaluate('e=>e.style.transform');page.wait_for_timeout(120)
+                assert cursor.evaluate('e=>e.style.transform')!=before
                 page.evaluate('window.__ttsDone()');page.wait_for_function('window.__utterances.length===2')
                 expect(page.locator('.reading-band')).to_have_attribute('data-source','4')
                 assert page.evaluate('window.__utterances[1].text')=='第二句。'
