@@ -42,7 +42,7 @@ private final class LocalNeuralTts {
             model: path("model.onnx"),
             lexicon: path("lexicon.txt"),
             tokens: path("tokens.txt"))
-        var model = sherpaOnnxOfflineTtsModelConfig(vits: vits, numThreads: 2)
+        var model = sherpaOnnxOfflineTtsModelConfig(vits: vits, numThreads: 4)
         var config = sherpaOnnxOfflineTtsConfig(
             model: model,
             ruleFsts: [path("date.fst"), path("number.fst")].joined(separator: ","),
@@ -67,6 +67,9 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
     ]
     private let synthesizer = AVSpeechSynthesizer()
     private let neuralQueue = DispatchQueue(label: "app.chanyue.reader.neural-tts", qos: .userInitiated)
+    private let cacheLock = NSLock()
+    private var cachedSpeech: (key: String, data: Data)?
+    private var sessionActive = false
     private var pending: CAPPluginCall?
     private var current: AVSpeechUtterance?
     private var requestID: String?
@@ -74,7 +77,6 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
     private var neuralCall: CAPPluginCall?
     private var neuralID: String?
     private var neuralToken = 0
-    private var audioFile: URL?
     private var observers: [NSObjectProtocol] = []
 
     public override func load() {
@@ -124,6 +126,21 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         return voices.first
     }
 
+    // 一次听书会话只激活一次音频会话，句间不反复停用/启用硬件。
+    private func activateSession() throws {
+        if sessionActive { return }
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio)
+        try session.setActive(true)
+        sessionActive = true
+    }
+
+    private func deactivateSession() {
+        if !sessionActive { return }
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        sessionActive = false
+    }
+
     @objc func prepare(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             let voices = self.systemVoices()
@@ -147,9 +164,11 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
             }
             let engine = call.getString("engine") ?? "system"
             let requested = call.getString("voice") ?? ""
+            let upcoming = call.getString("next") ?? ""
             #if canImport(SherpaOnnx)
             if engine == "neural" && LocalNeuralTts.available() {
-                self.speakWithNeural(text: text, rate: rate, id: id, call: call)
+                self.speakWithNeural(text: text, rate: rate, id: id, voice: requested,
+                                     next: upcoming.utf16.count <= 1000 ? upcoming : "", call: call)
                 return
             }
             #endif
@@ -161,11 +180,9 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         guard let selected = selectedVoice(requested) else {
             call.reject("没有可用的中文系统语音，请在系统朗读设置中下载中文语音后重试。"); return
         }
-        self.cancel("听书已暂停。")
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-            try AVAudioSession.sharedInstance().setActive(true)
-        } catch { call.reject("当前无法播放声音，请结束其他通话或音频后重试。"); return }
+        self.cancel("听书已暂停。", keepSession: true)
+        do { try self.activateSession() }
+        catch { call.reject("当前无法播放声音，请结束其他通话或音频后重试。"); return }
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = selected
         utterance.rate = min(AVSpeechUtteranceMaximumSpeechRate, max(AVSpeechUtteranceMinimumSpeechRate, AVSpeechUtteranceDefaultSpeechRate * Float(rate)))
@@ -174,45 +191,89 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
     }
 
     #if canImport(SherpaOnnx)
-    private func speakWithNeural(text: String, rate: Double, id: String, call: CAPPluginCall) {
-        self.cancel("听书已暂停。")
+    private func cacheKey(_ text: String, _ rate: Double, _ voice: String) -> String {
+        "\(voice)|\(rate)|\(text)"
+    }
+
+    private func cachedData(_ key: String) -> Data? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        return cachedSpeech?.key == key ? cachedSpeech?.data : nil
+    }
+
+    private func storeData(_ data: Data, _ key: String) {
+        cacheLock.lock()
+        cachedSpeech = (key, data)
+        cacheLock.unlock()
+    }
+
+    // 官方 WAV 写出后立刻读入内存并删掉临时文件，播放时不再碰磁盘。
+    private func wavData(_ text: String, rate: Double) -> Data? {
+        guard let engine = LocalNeuralTts.shared() else { return nil }
+        let audio = engine.generate(text: text, sid: 0, speed: Float(rate))
+        guard audio.n > 0 else { return nil }
+        let file = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("chanyue-tts-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard audio.save(filename: file.path) == 1,
+              let data = try? Data(contentsOf: file), !data.isEmpty else { return nil }
+        return data
+    }
+
+    // 播放当前句的同时合成下一句，句间只剩切换播放器，不再等待模型计算。
+    private func prefetch(_ text: String, rate: Double, voice: String) {
+        guard !text.isEmpty, text.utf16.count <= 1000 else { return }
+        let key = cacheKey(text, rate, voice)
+        guard cachedData(key) == nil else { return }
+        neuralQueue.async {
+            guard self.cachedData(key) == nil, let data = self.wavData(text, rate: rate) else { return }
+            self.storeData(data, key)
+        }
+    }
+
+    private func speakWithNeural(text: String, rate: Double, id: String, voice: String, next: String, call: CAPPluginCall) {
+        self.cancel("听书已暂停。", keepSession: true)
         self.neuralCall = call; self.neuralID = id
         self.neuralToken += 1
         let token = self.neuralToken
-        let file = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("chanyue-\(id).wav")
-        self.audioFile = file
-        self.neuralQueue.async {
-            guard let engine = LocalNeuralTts.shared() else {
-                DispatchQueue.main.async { self.finishNeural(id: id, call: call, error: "本地神经语音模型加载失败，请在设置中改用系统语音。") }
-                return
-            }
-            let audio = engine.generate(text: text, sid: 0, speed: Float(rate))
-            guard audio.n > 0, audio.save(filename: file.path) == 1 else {
+        let key = self.cacheKey(text, rate, voice)
+        if let data = self.cachedData(key) {
+            self.playNeural(data, id: id, call: call)
+            self.prefetch(next, rate: rate, voice: voice)
+            return
+        }
+        neuralQueue.async {
+            let data = self.cachedData(key) ?? self.wavData(text, rate: rate)
+            guard let data else {
                 DispatchQueue.main.async { self.finishNeural(id: id, call: call, error: "本地神经语音合成失败，请在设置中改用系统语音。") }
                 return
             }
+            self.storeData(data, key)
             DispatchQueue.main.async {
                 guard self.neuralToken == token, self.neuralID == id,
                       UIApplication.shared.applicationState == .active else {
                     self.finishNeural(id: id, call: call, error: "听书已暂停。")
                     return
                 }
-                do {
-                    try AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
-                    try AVAudioSession.sharedInstance().setActive(true)
-                    let player = try AVAudioPlayer(contentsOf: file)
-                    player.delegate = self
-                    player.prepareToPlay()
-                    self.player = player
-                    self.notifyListeners("speechStarted", data: ["id": id])
-                    if !player.play() {
-                        self.finishNeural(id: id, call: call, error: "当前无法播放神经语音，请在设置中改用系统语音。")
-                    }
-                } catch {
-                    self.finishNeural(id: id, call: call, error: "当前无法播放神经语音，请在设置中改用系统语音。")
-                }
+                self.playNeural(data, id: id, call: call)
+                self.prefetch(next, rate: rate, voice: voice)
             }
+        }
+    }
+
+    private func playNeural(_ data: Data, id: String, call: CAPPluginCall) {
+        do {
+            try self.activateSession()
+            let player = try AVAudioPlayer(data: data, fileTypeHint: AVFileType.wav.rawValue)
+            player.delegate = self
+            player.prepareToPlay()
+            self.player = player
+            self.notifyListeners("speechStarted", data: ["id": id])
+            if !player.play() {
+                self.finishNeural(id: id, call: call, error: "当前无法播放神经语音，请在设置中改用系统语音。")
+            }
+        } catch {
+            self.finishNeural(id: id, call: call, error: "当前无法播放神经语音，请在设置中改用系统语音。")
         }
     }
     #endif
@@ -221,25 +282,14 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         guard neuralID == id else { return }
         neuralID = nil; neuralCall = nil
         player?.stop(); player = nil
-        deactivate()
-        removeAudioFile()
         if let error { call.reject(error) } else { call.resolve() }
-    }
-
-    private func deactivate() {
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-    }
-
-    private func removeAudioFile() {
-        if let file = audioFile { try? FileManager.default.removeItem(at: file) }
-        audioFile = nil
     }
 
     @objc func stop(_ call: CAPPluginCall) {
         DispatchQueue.main.async { self.cancel("听书已暂停。"); call.resolve() }
     }
 
-    private func cancel(_ message: String) {
+    private func cancel(_ message: String, keepSession: Bool = false) {
         let systemCall = pending
         let neural = neuralCall
         pending = nil; current = nil; requestID = nil
@@ -247,8 +297,7 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         neuralToken += 1
         synthesizer.stopSpeaking(at: .immediate)
         player?.stop(); player = nil
-        if systemCall != nil || neural != nil { deactivate() }
-        removeAudioFile()
+        if !keepSession { deactivateSession() }
         systemCall?.reject(message)
         neural?.reject(message)
     }
@@ -261,7 +310,6 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
         guard utterance === current else { return }
         let call = pending
         pending = nil; current = nil; requestID = nil
-        deactivate()
         call?.resolve()
     }
     public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {

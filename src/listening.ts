@@ -53,11 +53,19 @@ export class SentenceListening {
         await this.persist(next);
         if (epoch !== this.epoch) return;
         this.update({ ...next, focus: range.start, speaking: false });
-        for (const chunk of speechChunks(this.text, range)) {
+        const chunks = speechChunks(this.text, range);
+        const followingSentence = this.sentences[index + 1];
+        const upcoming = followingSentence ? speechChunks(this.text, followingSentence)[0] : undefined;
+        for (let position = 0; position < chunks.length; position++) {
           if (epoch !== this.epoch) return;
-          await this.driver.speak(this.text.slice(chunk.start, chunk.end), this.state.rate, () => {
-            if (epoch === this.epoch) this.update({ speaking: true, focus: chunk.start });
-          });
+          const chunk = chunks[position];
+          const following = chunks[position + 1] ?? upcoming;
+          await this.driver.speak(
+            this.text.slice(chunk.start, chunk.end),
+            this.state.rate,
+            () => { if (epoch === this.epoch) this.update({ speaking: true, focus: chunk.start }); },
+            following ? this.text.slice(following.start, following.end) : '',
+          );
         }
       }
       if (epoch !== this.epoch) return;

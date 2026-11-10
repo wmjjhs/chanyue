@@ -4,7 +4,7 @@ import { applyPronunciation, validatePronunciationRules, type PronunciationRule 
 
 export interface SpeechDriver {
   prepare(): Promise<void>;
-  speak(text: string, rate: number, started: () => void): Promise<void>;
+  speak(text: string, rate: number, started: () => void, next?: string): Promise<void>;
   stop(): Promise<void>;
 }
 export type SpeechOptions = {
@@ -19,7 +19,7 @@ export const emptySpeechAvailability: SpeechAvailability = { available: false, n
 
 type SpeechPlugin = {
   prepare(): Promise<Partial<SpeechAvailability> | undefined>;
-  speak(options: { text: string; rate: number; id: string; engine: 'system' | 'neural'; voice: string }): Promise<void>;
+  speak(options: { text: string; next: string; rate: number; id: string; engine: 'system' | 'neural'; voice: string }): Promise<void>;
   stop(): Promise<void>;
   addListener(name: 'speechStarted', callback: (event: { id: string }) => void): Promise<PluginListenerHandle>;
 };
@@ -67,17 +67,19 @@ export function createSystemSpeech(getOptions: () => SpeechOptions = () => defau
       neuralAvailable = result?.neural === true;
       if (result?.available !== true && !neuralAvailable) throw new Error('没有可用的离线中文语音。请在手机系统文字转语音设置中安装中文语音后重试。');
     },
-    async speak(text, rate, started) {
+    async speak(text, rate, started, next = '') {
       const options = getOptions();
       const engine = options.engine === 'neural' && neuralAvailable ? 'neural' : 'system';
-      const spoken = applyPronunciation(text, validatePronunciationRules(options.rules));
+      const rules = validatePronunciationRules(options.rules);
+      const spoken = applyPronunciation(text, rules);
+      const spokenNext = engine === 'neural' ? applyPronunciation(next, rules) : '';
       const id = `speech-${Date.now()}-${++sequence}`, token = generation;
       const handle = await plugin.addListener('speechStarted', event => { if (event.id === id && token === generation) started(); });
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         if (token !== generation) throw new Error('听书已暂停。');
         await Promise.race([
-          plugin.speak({ text: spoken, rate, id, engine, voice: options.voice }),
+          plugin.speak({ text: spoken, next: spokenNext, rate, id, engine, voice: options.voice }),
           new Promise<never>((_, reject) => {
             timeout = setTimeout(() => reject(new Error('语音合成超时，请重试或改用系统语音。')), 15 * 60 * 1000);
           }),

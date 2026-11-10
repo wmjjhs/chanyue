@@ -71,4 +71,16 @@ describe('原生系统语音适配', () => {
     mock.prepare.mockRejectedValue(new Error('未实现'));
     await expect(speechVoices()).resolves.toEqual({ available: false, neural: false, voices: [] });
   });
+  it('神经语音把下一句交给原生预合成，两句都经过读音词典', async () => {
+    const options = { engine: 'neural' as const, voice: '', rules: [{ from: '银行', to: '很行' }] };
+    const driver = createSystemSpeech(() => options);
+    mock.prepare.mockResolvedValue(ready({ neural: true }));
+    await driver.prepare();
+    await driver.speak('般若与银行。', 1, vi.fn(), '银行与南无。');
+    expect(mock.speak.mock.calls[0][0]).toMatchObject({ engine: 'neural', text: '波惹与很行。', next: '很行与那摩。' });
+  });
+  it('系统语音不做预合成，避免无谓开销', async () => {
+    await createSystemSpeech().speak('测试。', 1, vi.fn(), '下一句。');
+    expect(mock.speak.mock.calls[0][0].next).toBe('');
+  });
 });
