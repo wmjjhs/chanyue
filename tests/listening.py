@@ -26,7 +26,7 @@ TTS = r'''
     if (methodName === 'speak') {
       window.__utterances.push({text:options.text,rate:options.rate});
       window.__ttsStop = () => reply({}, {message:'已暂停'});
-      window.__ttsStart = () => { const listener=window.__ttsListener; if(listener) window.Capacitor.fromNative({...listener,data:{id:options.id},success:true,save:true}); };
+      window.__ttsStart = (seconds) => { const listener=window.__ttsListener; if(listener) window.Capacitor.fromNative({...listener,data:{id:options.id,duration:seconds},success:true,save:true}); };
       window.__ttsDone = () => { window.__ttsStop=null; reply(); };
       return;
     }
@@ -68,16 +68,29 @@ def main():
                 page.evaluate('window.__noVoice=false');page.get_by_role('button',name='重试听书',exact=True).click()
                 page.wait_for_function('window.__utterances.length===1')
                 expect(page.locator('.page-navigation > span').first).to_contain_text('准备')
-                page.evaluate('window.__ttsStart()');expect(page.locator('.page-navigation > span').first).to_contain_text('按句同步')
+                page.evaluate('''window.__samples=[];(function sample(){const b=document.querySelector('.reading-band');if(b){const p=parseFloat(b.dataset.position);if(Number.isFinite(p))window.__samples.push(p);}requestAnimationFrame(sample);})();''')
+                page.evaluate('window.__ttsStart(1.2)');expect(page.locator('.page-navigation > span').first).to_contain_text('按句同步')
                 first=source(page);page.wait_for_timeout(250);assert source(page)==first
                 assert page.locator('.is-spoken-sentence').count()==0
                 cursor=page.locator('.scan-cursor');expect(cursor).to_be_visible()
                 assert cursor.evaluate('(e)=>[getComputedStyle(e).height,getComputedStyle(e).backgroundColor]')==reading_cursor
                 before=cursor.evaluate('e=>e.style.transform');page.wait_for_timeout(120)
                 assert cursor.evaluate('e=>e.style.transform')!=before
+                position_before=float(page.locator('.reading-band').get_attribute('data-position'))
                 page.evaluate('window.__ttsDone()');page.wait_for_function('window.__utterances.length===2')
+                boundary=float(page.locator('.reading-band').get_attribute('data-position'))
+                assert boundary>=position_before
+                page.wait_for_timeout(120)
+                assert float(page.locator('.reading-band').get_attribute('data-position'))==boundary
                 expect(page.locator('.reading-band')).to_have_attribute('data-source','4')
                 assert page.evaluate('window.__utterances[1].text')=='第二句。'
+                page.evaluate('window.__ttsStart(1.2)');page.wait_for_timeout(200)
+                assert float(page.locator('.reading-band').get_attribute('data-position'))>=boundary
+                samples=page.evaluate('window.__samples')
+                steps=[b-a for a,b in zip(samples,samples[1:])]
+                assert len(steps)>10,(len(steps),samples)
+                assert min(steps)>=-1e-9,('位置回退',min(steps))
+                assert max(steps)<0.5,('句界突跳',max(steps),samples)
                 page.get_by_role('button',name='暂停听书',exact=True).click()
                 page.evaluate('window.__ttsStart();window.__ttsDone()');page.wait_for_timeout(100)
                 assert source(page)==4 and page.evaluate('window.__utterances.length')==2

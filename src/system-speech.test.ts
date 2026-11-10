@@ -29,6 +29,19 @@ describe('原生系统语音适配', () => {
     expect(started).toHaveBeenCalledOnce(); await driver.stop(); mock.addListener.mock.calls[0][1]({ id: mock.speak.mock.calls[0][0].id });
     expect(started).toHaveBeenCalledOnce(); finish(); await run; expect(mock.remove).toHaveBeenCalledOnce();
   });
+  it('神经语音开始事件带回实际音频秒数，非法时长不传给滚动控制', async () => {
+    const driver = createSystemSpeech(), started = vi.fn();
+    mock.speak.mockImplementation(({ id }) => {
+      const callback = mock.addListener.mock.calls[0][1];
+      callback({ id, duration: 2.5 }); callback({ id, duration: -1 }); callback({ id, duration: Number.NaN });
+      return Promise.resolve();
+    });
+    await driver.speak('测试。', 1, started);
+    expect(started).toHaveBeenCalledTimes(3);
+    expect(started).toHaveBeenNthCalledWith(1, 2.5);
+    expect(started).toHaveBeenNthCalledWith(2, undefined);
+    expect(started).toHaveBeenNthCalledWith(3, undefined);
+  });
   it('播放失败也释放监听器', async () => {
     mock.speak.mockRejectedValue(new Error('中断')); await expect(createSystemSpeech().speak('测试。', 1, vi.fn())).rejects.toThrow('中断'); expect(mock.remove).toHaveBeenCalledOnce();
   });

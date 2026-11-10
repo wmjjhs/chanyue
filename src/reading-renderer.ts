@@ -59,8 +59,10 @@ export class ReadingRenderer {
     return { element, cells, trail };
   }
 
-  paint(frame: ReturnType<typeof motionFrame>) {
+  /** secondsPerWord 由听书实际语速传入；阅读模式沿用阅读速度，样式与留痕完全一致。 */
+  paint(frame: ReturnType<typeof motionFrame>, secondsPerWord?: number) {
     const { metrics: m } = this;
+    const elapsed = (words: number) => secondsPerWord === undefined ? words * 60 / this.settings.speed : words * secondsPerWord;
     const anchor = m.cursorRow - 1;
     const first = Math.max(0, Math.floor(frame.scroll - anchor) - 1);
     const last = Math.min(this.layout.rows.length, first + m.visibleLines + 5);
@@ -86,7 +88,7 @@ export class ReadingRenderer {
         const range = trailRange(this.layout, rowIndex, frame);
         row.trail.style.left = `${range.x * m.cellWidth}px`;
         row.trail.style.width = `${range.width * m.cellWidth}px`;
-        row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, frame.rowElapsed * 60 / this.settings.speed));
+        row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, elapsed(frame.rowElapsed)));
         row.trail.hidden = !this.document.words.length || range.width <= 0;
       }
       for (const cell of row.cells) {

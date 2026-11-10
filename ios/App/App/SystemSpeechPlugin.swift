@@ -268,7 +268,10 @@ public class SystemSpeechPlugin: CAPPlugin, CAPBridgedPlugin, AVSpeechSynthesize
             player.delegate = self
             player.prepareToPlay()
             self.player = player
-            self.notifyListeners("speechStarted", data: ["id": id])
+            // 真实音频秒数随开始事件回传，前端据此匀速推进下划线，句末不再估算/校正。
+            var event: [String: Any] = ["id": id]
+            if player.duration.isFinite, player.duration > 0 { event["duration"] = player.duration }
+            self.notifyListeners("speechStarted", data: event)
             if !player.play() {
                 self.finishNeural(id: id, call: call, error: "当前无法播放神经语音，请在设置中改用系统语音。")
             }

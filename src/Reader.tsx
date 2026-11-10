@@ -14,11 +14,12 @@ import { splitSentences, sentenceIndex, sentenceStop, advanceSentence } from './
 import { RecitationPanel } from './RecitationPanel';
 import { fixedPracticeUnits } from './practice-layout';
 import { preferencesFor, type BookState, type ReadingPreference } from './book-state';
-import { SentenceListening } from './listening';
+import { SentenceListening, DEFAULT_SPEECH_SPEED, adaptiveSpeechSpeed, measuredSpeechSpeed, smoothSpeechSpeed } from './listening';
 import { createSystemSpeech, type SpeechOptions } from './system-speech';
 import { parsePronunciationRules } from './speech-text';
 
 export type ReadingPosition = Pick<Book, 'line' | 'offset' | 'character' | 'completed'>;
+type ListeningTrack = { to: number; speed: number; target: number; last: number | null };
 type Props = { book: Book; settings: Settings; onBack: () => void; onSettings: () => void; onProgress: (position: ReadingPosition) => void; blocked: boolean; onBookState: (state: BookState) => Promise<void> };
 
 export default function Reader({ book, settings, onBack, onSettings, onProgress, blocked, onBookState }: Props) {
@@ -41,7 +42,10 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   useEffect(() => { if (focused) revealControl.current?.focus({ preventScroll: true }); }, [focused]);
   const position = useRef(initialPosition(book, documentModel));
   const manualSource = useRef<number | null>(!book.completed && typeof book.character === 'number' && documentModel.wordOrdinal[floorIndex(documentModel.offsets, book.character)] < 0 ? book.character : null);
-  const listeningSpan = useRef<{ from: number; to: number; began: number; duration: number } | null>(null);
+  const listeningTrack = useRef<ListeningTrack | null>(null);
+  const listeningSpeed = useRef(DEFAULT_SPEECH_SPEED);
+  const lastStarted = useRef<{ id: number; at: number; words: number } | null>(null);
+  const lastSeek = useRef(0);
   const pageInput = useRef<HTMLInputElement>(null);
   const pageLabel = useRef<HTMLSpanElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -102,7 +106,9 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (!listeningRef.current && manualSource.current !== null) frame.completed = false;
     const pages = pagination(lines.rows.length, m.visibleLines, rowIndex);
     const spoken = speech.getSnapshot();
-    renderer.current?.paint(frame);
+    const track = listeningTrack.current;
+    const secondsPerWord = listeningRef.current && track && track.target > 0 ? 1 / Math.max(0.1, track.speed || track.target) : undefined;
+    renderer.current?.paint(frame, secondsPerWord);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
     if (band.current) {
       band.current.dataset.position = String(position.current);
@@ -148,16 +154,48 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
   useLayoutEffect(() => { paint(); });
 
   useLayoutEffect(() => {
-    if (!listening) { listeningSpan.current = null; return; }
+    if (!listening) {
+      listeningTrack.current = null; lastStarted.current = null; listeningSpeed.current = DEFAULT_SPEECH_SPEED; return;
+    }
     const spoken = speech.getSnapshot();
-    const { documentModel: doc, sentences: all } = latest.current;
+    const { documentModel: doc } = latest.current;
+    const now = performance.now();
     const start = glyphPosition(doc, spoken.focus);
-    const sentence = all[sentenceIndex(all, spoken.focus)];
-    const end = sentence ? Math.max(start, glyphPosition(doc, sentence.end)) : start;
-    if (spoken.completed || position.current < start - 2 || position.current > start + 6) position.current = spoken.completed ? doc.words.length : start;
+    const end = glyphPosition(doc, spoken.spokenEnd);
+    const firstEntry = listeningTrack.current === null;
+    const seeked = spoken.seekId !== lastSeek.current;
+    lastSeek.current = spoken.seekId;
+
+    // 只有首次进入/主动跳句/已听完才定位；正常续句保持位置连续，绝不回跳。
+    if (spoken.completed) position.current = doc.words.length;
+    else if (firstEntry || seeked) position.current = start;
+
     const rate = Math.max(0.5, Math.min(2, spoken.rate)) || 1;
-    const remaining = Math.max(0, end - position.current);
-    listeningSpan.current = { from: position.current, to: position.current + remaining, began: performance.now(), duration: Math.max(300, remaining / (3.2 * rate) * 1000) };
+    const previous = listeningTrack.current;
+    const started = spoken.speaking && !spoken.completed && spoken.startedId !== (lastStarted.current?.id ?? 0);
+    let speed = previous?.speed ?? 0;
+    let target = 0;
+    if (started) {
+      const last = lastStarted.current;
+      // 系统语音拿不到精确时长，用两次真实发声之间的耗时逐句校正估算速度。
+      const elapsed = last ? (now - last.at) / 1000 : 0;
+      if (last && !seeked && spoken.duration <= 0 && elapsed <= 120) {
+        listeningSpeed.current = adaptiveSpeechSpeed(listeningSpeed.current, last.words, elapsed, rate);
+      }
+      const words = Math.max(0, end - position.current);
+      const measured = spoken.duration > 0 ? measuredSpeechSpeed(words, spoken.duration) : null;
+      target = measured ?? listeningSpeed.current * rate;
+      if (measured !== null && !seeked) listeningSpeed.current = Math.max(1.5, Math.min(12, measured / rate));
+      // 句界只改变目标速度，当前速度保留，由 rAF 逐帧平滑过渡。
+      if (firstEntry || seeked || !previous || previous.speed === 0) speed = target;
+      lastStarted.current = { id: spoken.startedId, at: now, words: Math.max(0, end - start) };
+    } else if (seeked || firstEntry || spoken.completed) {
+      speed = 0; // 跳句后重新定位，等真实发声再启动。
+    } else {
+      // 句间尚未发声时冻结；保留当前速度供下一句平滑接续。
+      target = spoken.speaking ? previous?.target ?? 0 : 0;
+    }
+    listeningTrack.current = { to: Math.max(position.current, end), speed, target, last: null };
     manualSource.current = spoken.completed ? null : spoken.focus;
     setRunning(spoken.active); paint();
   }, [listening, speechState, documentModel, paint, setRunning]);
@@ -166,13 +204,19 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     if (!listening || !speechState.active || !speechState.speaking) return;
     let animation = 0;
     const tick = (now: number) => {
-      const span = listeningSpan.current;
-      if (!span) return;
-      const t = Math.min(1, Math.max(0, (now - span.began) / span.duration));
-      const next = span.from + (span.to - span.from) * t;
-      if (next > position.current) position.current = next;
-      paint();
-      if (t < 1) animation = requestAnimationFrame(tick);
+      const track = listeningTrack.current;
+      if (!track) return;
+      if (track.last === null) track.last = now;
+      const dt = Math.max(0, Math.min(0.1, (now - track.last) / 1000));
+      track.last = now;
+      if (dt > 0 && track.target > 0) {
+        track.speed = smoothSpeechSpeed(track.speed, track.target, dt);
+        if (position.current < track.to) {
+          position.current = Math.min(track.to, position.current + track.speed * dt);
+          paint();
+        }
+      }
+      animation = requestAnimationFrame(tick);
     };
     animation = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(animation);

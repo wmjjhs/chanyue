@@ -4,7 +4,8 @@ import { applyPronunciation, validatePronunciationRules, type PronunciationRule 
 
 export interface SpeechDriver {
   prepare(): Promise<void>;
-  speak(text: string, rate: number, started: () => void, next?: string): Promise<void>;
+  /** started 在真实发声第一帧触发；神经语音会带回这段音频的实际秒数。 */
+  speak(text: string, rate: number, started: (seconds?: number) => void, next?: string): Promise<void>;
   stop(): Promise<void>;
 }
 export type SpeechOptions = {
@@ -21,7 +22,7 @@ type SpeechPlugin = {
   prepare(): Promise<Partial<SpeechAvailability> | undefined>;
   speak(options: { text: string; next: string; rate: number; id: string; engine: 'system' | 'neural'; voice: string }): Promise<void>;
   stop(): Promise<void>;
-  addListener(name: 'speechStarted', callback: (event: { id: string }) => void): Promise<PluginListenerHandle>;
+  addListener(name: 'speechStarted', callback: (event: { id: string; duration?: number }) => void): Promise<PluginListenerHandle>;
 };
 const plugin = registerPlugin<SpeechPlugin>('SystemSpeech');
 let sequence = 0;
@@ -74,7 +75,11 @@ export function createSystemSpeech(getOptions: () => SpeechOptions = () => defau
       const spoken = applyPronunciation(text, rules);
       const spokenNext = engine === 'neural' ? applyPronunciation(next, rules) : '';
       const id = `speech-${Date.now()}-${++sequence}`, token = generation;
-      const handle = await plugin.addListener('speechStarted', event => { if (event.id === id && token === generation) started(); });
+      const handle = await plugin.addListener('speechStarted', event => {
+        if (event.id !== id || token !== generation) return;
+        const seconds = event.duration;
+        started(typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0 && seconds <= 600 ? seconds : undefined);
+      });
       let timeout: ReturnType<typeof setTimeout> | undefined;
       try {
         if (token !== generation) throw new Error('听书已暂停。');
