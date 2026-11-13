@@ -1,5 +1,4 @@
 // swift-tools-version: 5.9
-// 版权所有：波哥
 import PackageDescription
 
 // DO NOT MODIFY THIS FILE - managed by Capacitor CLI commands

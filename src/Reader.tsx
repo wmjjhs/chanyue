@@ -110,15 +110,21 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
     const secondsPerWord = listeningRef.current && track && track.target > 0 ? 1 / Math.max(0.1, track.speed || track.target) : undefined;
     renderer.current?.paint(frame, secondsPerWord);
     const word = Math.min(doc.words.length - 1, Math.floor(position.current));
-    if (band.current) {
-      band.current.dataset.position = String(position.current);
-      band.current.dataset.source = String(manualSource.current ?? sourcePosition(doc, position.current));
-      band.current.dataset.scroll = String(frame.scroll * m.lineHeight);
-      band.current.dataset.total = String(doc.words.length);
-      band.current.dataset.row = String(rowIndex);
-      band.current.dataset.page = String(pages.current);
-      band.current.dataset.pages = String(pages.total);
-      band.current.dataset.rows = String(lines.rows.length);
+    const bandElement = band.current;
+    if (bandElement) {
+      const values: Record<string, string> = {
+        position: String(position.current),
+        source: String(manualSource.current ?? sourcePosition(doc, position.current)),
+        scroll: String(frame.scroll * m.lineHeight),
+        total: String(doc.words.length),
+        row: String(rowIndex),
+        page: String(pages.current),
+        pages: String(pages.total),
+        rows: String(lines.rows.length),
+      };
+      for (const [key, value] of Object.entries(values)) {
+        if (bandElement.dataset[key] !== value) bandElement.dataset[key] = value;
+      }
     }
     const label = !doc.words.length ? '没有可计数的文字（仅有标点或空白）' : position.current >= doc.words.length && manualSource.current === null
       ? '已读完 · 愿这一刻的宁静，陪你走远一点'
@@ -128,13 +134,18 @@ export default function Reader({ book, settings, onBack, onSettings, onProgress,
       ? spoken.active ? spoken.speaking ? '正在听书 · 按句同步' : '正在准备语音…' : spoken.completed ? '本书已听完' : '听书 · 暂停后从当前句重读'
       : `第 ${pages.current} / ${pages.total} 页`;
     if (pageLabel.current && pageLabel.current.textContent !== pageText) pageLabel.current.textContent = pageText;
-    if (pageInput.current) pageInput.current.placeholder = String(pages.current || 1);
+    const placeholder = String(pages.current || 1);
+    if (pageInput.current && pageInput.current.placeholder !== placeholder) pageInput.current.placeholder = placeholder;
     const sentence = sentenceIndex(latest.current.sentences, manualSource.current ?? sourcePosition(doc, position.current));
-    if (previousButton.current) previousButton.current.disabled = (listeningRef.current || latest.current.settings.sentenceMode) ? sentence < 0 || (sentence === 0 && position.current === 0) : pages.current <= 1;
-    if (nextButton.current) nextButton.current.disabled = (listeningRef.current || latest.current.settings.sentenceMode) ? sentence < 0 || sentence >= latest.current.sentences.length - 1 : pages.current >= pages.total;
+    const sentenceMode = listeningRef.current || latest.current.settings.sentenceMode;
+    const previousDisabled = sentenceMode ? sentence < 0 || (sentence === 0 && position.current === 0) : pages.current <= 1;
+    const nextDisabled = sentenceMode ? sentence < 0 || sentence >= latest.current.sentences.length - 1 : pages.current >= pages.total;
+    if (previousButton.current && previousButton.current.disabled !== previousDisabled) previousButton.current.disabled = previousDisabled;
+    if (nextButton.current && nextButton.current.disabled !== nextDisabled) nextButton.current.disabled = nextDisabled;
     const percent = `${Math.floor(frame.progress * 100)}% 已读`;
     if (progressLabel.current && progressLabel.current.textContent !== percent) progressLabel.current.textContent = percent;
-    if (progressFill.current) progressFill.current.style.width = `${frame.progress * 100}%`;
+    const progressWidth = `${frame.progress * 100}%`;
+    if (progressFill.current && progressFill.current.style.width !== progressWidth) progressFill.current.style.width = progressWidth;
   }, [currentRow]);
 
   useLayoutEffect(() => {

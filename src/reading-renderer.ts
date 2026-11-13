@@ -6,12 +6,20 @@ import { trailOpacity } from './trail-fade';
 import { sourceFontFamily } from './source-font';
 
 type Cell = { element: HTMLSpanElement; glyph: number; column: number };
-type RowView = { element: HTMLDivElement; cells: Cell[]; trail: HTMLElement };
+type RowView = {
+  element: HTMLDivElement; cells: Cell[]; trail: HTMLElement;
+  top: string; trailLeft: string; trailWidth: string; trailOpacity: string; trailHidden: boolean;
+};
 type Metrics = ReturnType<typeof readingMetrics>;
 
 export class ReadingRenderer {
   private rows = new Map<number, RowView>();
   private current: HTMLElement | null = null;
+  private containerTransform = '';
+  private cursorHidden: boolean | null = null;
+  private cursorWidth = '';
+  private cursorTransform = '';
+  private cursorSpan = '';
 
   constructor(
     private container: HTMLDivElement, private cursor: HTMLDivElement,
@@ -19,6 +27,7 @@ export class ReadingRenderer {
     private metrics: Metrics, private settings: Settings,
   ) {
     this.cursor.style.height = `${settings.cursorThickness}px`;
+    this.cursor.dataset.phase = 'scan';
   }
 
   private populate(rowIndex: number, recycled?: RowView): RowView {
@@ -27,9 +36,10 @@ export class ReadingRenderer {
     element.className = `reading-row${row.paragraph ? ' paragraph-start' : ''}`;
     element.dataset.row = String(rowIndex);
     element.style.height = `${this.metrics.lineHeight}px`;
+    const available = recycled?.cells ?? [];
     const cells = row.glyphs.map((glyph, index) => {
-      const span = document.createElement('span');
-      const inner = document.createElement('span');
+      const span = available[index]?.element ?? document.createElement('span');
+      const inner = (span.firstElementChild as HTMLSpanElement | null) ?? document.createElement('span');
       span.className = 'reading-glyph';
       span.dataset.char = String(glyph);
       span.dataset.source = String(this.document.offsets[glyph]);
@@ -38,13 +48,12 @@ export class ReadingRenderer {
       span.style.width = `${row.widths[index] * this.metrics.cellWidth}px`;
       span.style.fontSize = `${this.metrics.fontSize * this.document.scales[glyph]}px`;
       span.style.fontWeight = this.document.bold[glyph] ? '700' : '400';
-      const family = sourceFontFamily(this.document.fonts[glyph]);
-      if (family) span.style.fontFamily = family;
+      span.style.fontFamily = sourceFontFamily(this.document.fonts[glyph]) ?? '';
       inner.style.fontWeight = span.style.fontWeight;
       span.style.alignItems = 'flex-end';
       span.style.paddingBottom = `${(this.metrics.lineHeight - this.metrics.maxFontSize) / 2}px`;
       inner.textContent = this.document.glyphs[glyph];
-      span.append(inner);
+      if (!inner.parentElement) span.append(inner);
       return { element: span, glyph, column: row.columns[index] };
     });
     const trail = recycled?.trail ?? document.createElement('i');
@@ -56,7 +65,14 @@ export class ReadingRenderer {
     trail.hidden = true;
     element.textContent = '';
     element.append(...cells.map(cell => cell.element), trail);
-    return { element, cells, trail };
+    return {
+      element, cells, trail,
+      top: element.style.top,
+      trailLeft: trail.style.left,
+      trailWidth: trail.style.width,
+      trailOpacity: trail.style.opacity,
+      trailHidden: trail.hidden,
+    };
   }
 
   /** secondsPerWord 由听书实际语速传入；阅读模式沿用阅读速度，样式与留痕完全一致。 */
@@ -78,18 +94,26 @@ export class ReadingRenderer {
       this.rows.set(index, row);
     }
     for (const row of reusable) row.element.remove();
-    this.container.style.transform = `translate3d(0, ${(first - frame.scroll) * m.lineHeight}px, 0)`;
+    const scrollTransform = `translate3d(0, ${(first - frame.scroll) * m.lineHeight}px, 0)`;
+    if (this.containerTransform !== scrollTransform) {
+      this.containerTransform = scrollTransform;
+      this.container.style.transform = scrollTransform;
+    }
     let nearest: HTMLElement | null = null;
     let nearestDistance = Infinity;
     for (const [rowIndex, row] of this.rows) {
       const top = `${(anchor + rowIndex - first) * m.lineHeight}px`;
-      if (row.element.style.top !== top) row.element.style.top = top;
+      if (row.top !== top) { row.top = top; row.element.style.top = top; }
       if (this.settings.cursorMode === 'trail') {
         const range = trailRange(this.layout, rowIndex, frame);
-        row.trail.style.left = `${range.x * m.cellWidth}px`;
-        row.trail.style.width = `${range.width * m.cellWidth}px`;
-        row.trail.style.opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, elapsed(frame.rowElapsed)));
-        row.trail.hidden = !this.document.words.length || range.width <= 0;
+        const left = `${range.x * m.cellWidth}px`;
+        const width = `${range.width * m.cellWidth}px`;
+        const opacity = String(trailOpacity(this.settings, frame.rowIndex - rowIndex, elapsed(frame.rowElapsed)));
+        const hidden = !this.document.words.length || range.width <= 0;
+        if (row.trailLeft !== left) { row.trailLeft = left; row.trail.style.left = left; }
+        if (row.trailWidth !== width) { row.trailWidth = width; row.trail.style.width = width; }
+        if (row.trailOpacity !== opacity) { row.trailOpacity = opacity; row.trail.style.opacity = opacity; }
+        if (row.trailHidden !== hidden) { row.trailHidden = hidden; row.trail.hidden = hidden; }
       }
       for (const cell of row.cells) {
         if (rowIndex === frame.rowIndex && this.document.wordOrdinal[cell.glyph] >= 0) {
@@ -105,16 +129,27 @@ export class ReadingRenderer {
       nearest?.classList.add('is-current');
       this.current = nearest;
     }
-    this.cursor.hidden = this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
-    this.cursor.style.width = `${frame.width * m.cellWidth}px`;
-    this.cursor.style.transform = `translate3d(${frame.x * m.cellWidth}px, ${(anchor + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
-    this.cursor.dataset.phase = 'scan';
-    this.cursor.dataset.span = String(frame.span);
+    const hidden = this.settings.cursorMode === 'trail' || !this.document.words.length || frame.span === 0;
+    if (this.cursorHidden !== hidden) { this.cursorHidden = hidden; this.cursor.hidden = hidden; }
+    const width = `${frame.width * m.cellWidth}px`;
+    if (this.cursorWidth !== width) { this.cursorWidth = width; this.cursor.style.width = width; }
+    const cursorTransform = `translate3d(${frame.x * m.cellWidth}px, ${(anchor + frame.y - frame.scroll) * m.lineHeight + m.underlineOffset}px, 0)`;
+    if (this.cursorTransform !== cursorTransform) {
+      this.cursorTransform = cursorTransform;
+      this.cursor.style.transform = cursorTransform;
+    }
+    const span = String(frame.span);
+    if (this.cursorSpan !== span) { this.cursorSpan = span; this.cursor.dataset.span = span; }
   }
 
   dispose() {
     this.container.textContent = '';
     this.rows.clear();
     this.current = null;
+    this.containerTransform = '';
+    this.cursorHidden = null;
+    this.cursorWidth = '';
+    this.cursorTransform = '';
+    this.cursorSpan = '';
   }
 }

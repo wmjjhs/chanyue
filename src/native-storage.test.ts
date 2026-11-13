@@ -47,6 +47,11 @@ beforeEach(() => {
 });
 
 describe('原生持久化适配器（模拟插件）', () => {
+  it('损坏的书籍文件会被拒绝加载', async () => {
+    state.preferences.set('chanyue-native-initialized-v1', 'true');
+    state.files.set('Chanyue/books/broken.json', JSON.stringify({ id: 'broken', title: '坏书', author: '', format: 'TXT', lines: [], createdAt: 1, cover: 1 }));
+    await expect(loadNativeBooks()).rejects.toThrow('书籍数据已损坏');
+  });
   it('听读位置与阅读/背诵独立，合并重命名与备份完整保留', async () => {
     const [book, other] = await loadNativeBooks();
     const listening = { source: 4, completed: false, rate: 1.5 };

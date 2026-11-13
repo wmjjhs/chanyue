@@ -6,15 +6,24 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'artifacts/android'
+TTS_ASSETS = ('model.onnx', 'lexicon.txt', 'tokens.txt', 'date.fst', 'number.fst')
 
 
 def run(command, **kwargs):
     return subprocess.run(command, cwd=ROOT, check=True, **kwargs)
+
+
+def stream_sha256(stream):
+    digest = hashlib.sha256()
+    for block in iter(lambda: stream.read(1024 * 1024), b''):
+        digest.update(block)
+    return digest.hexdigest()
 
 
 def verify_assets(archive):
@@ -28,8 +37,19 @@ def verify_assets(archive):
             name = 'assets/public/' + source.relative_to(ROOT / 'dist-native').as_posix()
             if archive.read(name) != source.read_bytes():
                 raise RuntimeError('APK与已验证离线资源不同：' + name)
-    if any(name.endswith(('/sw.js', '/registerSW.js')) for name in archive.namelist()):
+    names = set(archive.namelist())
+    if any(name.endswith(('/sw.js', '/registerSW.js')) for name in names):
         raise RuntimeError('原生安装包不应包含Service Worker')
+    for name in TTS_ASSETS:
+        entry = 'assets/tts/' + name
+        source = ROOT / 'android/app/src/main/assets/tts' / name
+        if entry not in names or not source.is_file():
+            raise RuntimeError('APK缺少内置神经语音模型：' + name)
+        with archive.open(entry) as packed, source.open('rb') as local:
+            if stream_sha256(packed) != stream_sha256(local):
+                raise RuntimeError('APK内神经语音模型与已校验文件不一致：' + name)
+    if not any(part.startswith('lib/') and part.endswith('/libsherpa-onnx-jni.so') for part in names):
+        raise RuntimeError('APK缺少本地神经语音JNI库')
 
 
 def main():
@@ -46,6 +66,7 @@ def main():
         raise RuntimeError('版本号不合法')
     build_text = (ROOT / 'android/app/build.gradle').read_text(encoding='utf-8')
     version_code = re.search(r'versionCode (\d+)', build_text).group(1)
+    run([sys.executable, str(ROOT / 'scripts/prepare_android_native.py')])
     windows = os.name == 'nt'
     npm = 'npm.cmd' if windows else 'npm'
     if not args.skip_sync:

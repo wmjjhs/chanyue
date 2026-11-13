@@ -92,6 +92,27 @@ describe('原生系统语音适配', () => {
     await driver.speak('般若与银行。', 1, vi.fn(), '银行与南无。');
     expect(mock.speak.mock.calls[0][0]).toMatchObject({ engine: 'neural', text: '波惹与很行。', next: '很行与那摩。' });
   });
+  it('音色列表兼容非数组、超量与名称缺失', async () => {
+    mock.prepare.mockResolvedValue(ready({ neural: true, voices: 'not-array' }));
+    expect((await speechVoices()).voices).toEqual([]);
+    const many = Array.from({ length: 26 }, (_, index) => ({ id: `v${index}`, name: index === 0 ? 123 : `音色${index}` }));
+    mock.prepare.mockResolvedValue(ready({ neural: true, voices: many }));
+    const voices = (await speechVoices()).voices;
+    expect(voices).toHaveLength(24);
+    expect(voices[0].name).toBe('v0');
+  });
+  it('后续文本按字符串、空串与数组三种形态排队', async () => {
+    const driver = createSystemSpeech(() => ({ engine: 'system', voice: '', rules: [] }));
+    await driver.speak('测试。', 1, vi.fn(), '下一句');
+    await driver.speak('测试。', 1, vi.fn(), '');
+    await driver.speak('测试。', 1, vi.fn(), ['甲', '乙']);
+    expect(mock.speak).toHaveBeenCalledTimes(3);
+  });
+  it('网页版停止朗读不调用原生插件', async () => {
+    mock.native = false;
+    await createSystemSpeech().stop();
+    expect(mock.stop).not.toHaveBeenCalled();
+  });
   it('系统语音不做预合成，避免无谓开销', async () => {
     await createSystemSpeech().speak('测试。', 1, vi.fn(), '下一句。');
     expect(mock.speak.mock.calls[0][0].next).toBe('');

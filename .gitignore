@@ -24,4 +24,6 @@ android/local.properties
 android/**/build/
 android/capacitor-cordova-android-plugins/
 android/app/src/main/assets/
+android/app/libs/sherpa-onnx-*.aar
 android/app/src/main/res/xml/config.xml
+*.log

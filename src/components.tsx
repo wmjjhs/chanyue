@@ -23,9 +23,10 @@ export function Modal({ title, eyebrow, children, onClose, className = '' }: {
   useEffect(() => {
     const dialog = ref.current;
     dialog?.showModal();
+    dialog?.focus({ preventScroll: true });
     return () => dialog?.close();
   }, []);
-  return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={id}
+  return <dialog ref={ref} tabIndex={-1} className={`modal ${className}`} aria-labelledby={id}
     onCancel={event => { event.preventDefault(); onClose(); }}
     onClick={event => { if (event.target === event.currentTarget) {
       const box = event.currentTarget.getBoundingClientRect();
@@ -47,10 +48,57 @@ export function BookCover({ book, small = false }: { book: Book; small?: boolean
   </div>;
 }
 
-export function SettingsPanel({ settings, onChange, onClose, bookSpecific = false }: {
+const SETTING_GROUPS = [
+  ['typography', '文字'], ['colors', '配色'], ['layout', '排版'], ['cursor', '下划线'],
+  ['trail', '留痕'], ['ambient', '环境音'], ['speech', '听书'],
+] as const;
+type SettingGroup = typeof SETTING_GROUPS[number][0];
+
+export function SettingsPanel({ settings: initialSettings, onChange, onClose, bookSpecific = false }: {
   settings: Settings; onChange: (settings: Settings) => void; onClose: () => void; bookSpecific?: boolean;
 }) {
-  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => onChange(validateSettings({ ...settings, [key]: value }));
+  const [settings, setSettings] = useState<Settings>(initialSettings);
+  const [activeGroup, setActiveGroup] = useState<SettingGroup>('typography');
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const dirty = JSON.stringify(settings) !== JSON.stringify(initialSettings);
+  const set = <K extends keyof Settings>(key: K, value: Settings[K]) => setSettings(validateSettings({ ...settings, [key]: value }));
+  const discard = () => { if (dirty) { setConfirmDiscard(true); return; } onClose(); };
+  const save = () => { onChange(settings); onClose(); };
+  useEffect(() => {
+    const dialog = document.querySelector<HTMLDialogElement>('.settings-modal');
+    if (!dialog) return;
+    let startX = 0, startY = 0, moved = false, blockedUntil = 0;
+    const down = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      startX = event.clientX; startY = event.clientY; moved = false;
+    };
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      if (Math.abs(event.clientX - startX) > 8 || Math.abs(event.clientY - startY) > 8) moved = true;
+    };
+    const up = (event: PointerEvent) => {
+      if (event.pointerType !== 'touch') return;
+      if (moved) blockedUntil = Date.now() + 250;
+    };
+    const block = (event: Event) => {
+      if (!moved && Date.now() >= blockedUntil) return;
+      event.preventDefault(); event.stopPropagation(); moved = false;
+      const target = event.target;
+      if (target instanceof HTMLElement) target.blur();
+    };
+    dialog.addEventListener('pointerdown', down, true);
+    dialog.addEventListener('pointermove', move, true);
+    dialog.addEventListener('pointerup', up, true);
+    dialog.addEventListener('pointercancel', up, true);
+    for (const name of ['click', 'change', 'input']) dialog.addEventListener(name, block, true);
+    return () => {
+      dialog.removeEventListener('pointerdown', down, true);
+      dialog.removeEventListener('pointermove', move, true);
+      dialog.removeEventListener('pointerup', up, true);
+      dialog.removeEventListener('pointercancel', up, true);
+      for (const name of ['click', 'change', 'input']) dialog.removeEventListener(name, block, true);
+    };
+  }, []);
   const [availability, setAvailability] = useState<SpeechAvailability>(emptySpeechAvailability);
   useEffect(() => {
     let alive = true;
@@ -70,7 +118,7 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
   const audioError = useSyncExternalStore(ambientAudio.subscribe, ambientAudio.getError);
   const audioMessages = { idle: '开始阅读后按偏好播放', loading: '正在准备本地环境音…', playing: '环境音播放中', paused: '环境音已暂停或静音', interrupted: '声音被系统中断，请重新点击开始阅读', error: `暂时无法播放声音：${audioError ?? '音频异常'}。可重新点击开始阅读；若仍失败，请反馈此错误码。不影响阅读。` };
   const previewWords = settings.cursorMode === 'trail' ? 10 : Math.min(settings.cursorWords, 10);
-  return <Modal title="找到你的阅读节奏" eyebrow="READING PREFERENCES / 阅读设置" onClose={onClose} className="settings-modal">
+  return <Modal title="找到你的阅读节奏" eyebrow="READING PREFERENCES / 阅读设置" onClose={discard} className="settings-modal">
     <div className="settings-preview" style={{ background: settings.pageColor }}>
       <div className="multiline-preview" style={{ color: settings.textColor, background: settings.lineColor, fontFamily: fonts[settings.font], fontSize: Math.min(settings.fontSize, 26), lineHeight: 1.65 }}>
         <span className="preview-window" style={{ fontSize: `min(1em, calc((100vw - 140px) / ${1.12 * previewWords}))` }}>{Array.from('把目光留在此刻从容读').slice(0, previewWords).map((glyph, i) => <span key={i}>{glyph}</span>)}<i className="preview-underline" aria-hidden="true" style={{ height: settings.cursorThickness, right: settings.cursorMode === 'trail' ? '35%' : 0, background: settings.cursorTransparent ? 'transparent' : settings.cursorColor }} /></span>
@@ -79,7 +127,11 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <span style={{ color: settings.textColor }}>{settings.cursorMode === 'trail' ? '划线留痕 · 读到哪里画到哪里' : `指读 · ${settings.cursorWords} 字`} · {settings.cursorThickness} px{settings.cursorMode === 'pointer' && settings.cursorWords > previewWords && ' · 预览仅示意10字'}</span>
     </div>
     <p className="field-note">{bookSpecific ? '字号、速度和句末暂停只为本书记住；配色、字体等其他设置仍为共用。' : '这里的字号、速度和句末暂停用于尚未打开过的书；已有书籍保留各自偏好。'}</p>
-    <section className="settings-section"><h3>文字样式</h3>
+    <nav className="settings-groups" role="tablist" aria-label="设置分组">
+      {SETTING_GROUPS.map(([key, label]) => <button type="button" key={key} role="tab" aria-selected={activeGroup === key} className={activeGroup === key ? 'active' : ''} onClick={() => setActiveGroup(key)}>{label}</button>)}
+    </nav>
+    <p className={`settings-hint${dirty ? ' dirty' : ''}`} role="status">{dirty ? '有尚未保存的修改 · 预览已实时更新，保存后才会生效' : '调整后点「保存设置」才会生效；点 × 或「放弃修改」不会改变现有设置'}</p>
+    <section className="settings-section" hidden={activeGroup !== 'typography'}><h3>文字样式</h3>
       <p className="field-note">Word 中已指定的字体与粗体优先保留；下方字体用于未指定原字体的文字。手机未安装的原字体会按同类字体回退，字号调整仍保留原文大小比例。</p>
       <fieldset className="font-options"><legend className="sr-only">字体类型</legend>
         <div className="font-options-grid">{([['song', '宋体', '温润书卷'], ['sans', '黑体', '清晰简洁'], ['kai', '楷体', '笔墨之间']] as const).map(([key, name, description]) =>
@@ -92,16 +144,16 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <div className="range-ends"><span>小</span><span>大</span></div>
       <p className="field-note">使用设备自带字体；未安装时自动使用同类字体。</p>
     </section>
-    <section className="settings-section"><h3>阅读配色</h3>
+    <section className="settings-section" hidden={activeGroup !== 'colors'}><h3>阅读配色</h3>
       <div className="theme-options">{themes.map(theme => <button key={theme.name} aria-label={theme.name} aria-pressed={settings.pageColor === theme.pageColor && settings.lineColor === theme.lineColor && settings.textColor === theme.textColor}
-        onClick={() => onChange({ ...settings, ...theme })}>
+        onClick={() => setSettings({ ...settings, ...theme } as Settings)}>
         <span style={{ background: theme.pageColor, color: theme.textColor }}><span style={{ background: theme.lineColor }}>文</span>{settings.pageColor === theme.pageColor && <Check size={12} />}</span>{theme.name}
       </button>)}</div>
       <div className="color-options">{([['textColor', '文字颜色'], ['lineColor', '文字背景'], ['pageColor', '页面背景']] as const).map(([key, label]) =>
         <label key={key}><span>{label}</span><div><input type="color" aria-label={label} value={settings[key]} onChange={e => set(key, e.target.value)} /><code>{settings[key].toUpperCase()}</code></div></label>)}
       </div>
     </section>
-    <section className="settings-section"><h3>排版方式</h3><div className="layout-options">
+    <section className="settings-section" hidden={activeGroup !== 'layout'}><h3>排版方式</h3><div className="layout-options">
       <button aria-label="语义段落" aria-pressed={settings.layoutMode === 'semantic'} onClick={() => set('layoutMode', 'semantic')}>语义段落<small>保留段落、缩进与单词间隔</small></button>
       <button aria-label="紧凑排列" aria-pressed={settings.layoutMode === 'compact'} onClick={() => set('layoutMode', 'compact')}>紧凑排列<small>保留标点，忽略段落空白</small></button>
       <button aria-label="无标点密排" aria-pressed={settings.layoutMode === 'plain'} onClick={() => set('layoutMode', 'plain')}>无标点密排<small>去标点、去空白，连续排满</small></button>
@@ -109,7 +161,7 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <input id="max-lines" type="range" ref={updateRangeFill} min="2" max={MAX_VISIBLE_LINES} value={settings.maxLines} onChange={e => set('maxLines', Number(e.target.value))} />
       <p className="field-note">最多30行，空间不足时自动减少，不会为凑行数把字号缩到12px以下。行距随可用高度均匀分配，阅读区延伸至按钮上方。每页按实际显示行数计算；字号、排版或方向改变时保留阅读位置。</p>
     </section>
-    <section className="settings-section"><h3>下划线与节奏</h3>
+    <section className="settings-section" hidden={activeGroup !== 'cursor'}><h3>下划线与节奏</h3>
       <label className="transparent-setting"><input type="checkbox" checked={settings.sentenceMode} onChange={event => set('sentenceMode', event.target.checked)} />按句推进，句末暂停</label>
       <p className="field-note">开启后底部翻页按钮改为前一句、后一句；开始只读当前句，句末停住等待你。分句依据原文句号、问号、感叹号、分号和换行；关闭后恢复连续阅读，仍可用页码跳转。</p>
       <label className="range-label" htmlFor="cursor-row">下划线停留行 <output>第 {settings.cursorRow} <small>行</small></output></label>
@@ -133,7 +185,7 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <div className="range-ends"><span>30 · 慢读</span><span>{MAX_READING_SPEED} · 快读</span></div>
       <p className="field-note">总时长只按文字数计算，标点与空白不计时；经过标点不额外停顿。指读、划线与正文上移使用同一时钟，换行直接切到下一行，不另加时间。建议先用 120–300 字/分钟；不适时请暂停。</p>
     </section>
-    <section className="settings-section">
+    <section className="settings-section" hidden={activeGroup !== 'trail'}>
       <h3>留痕层次</h3>
       <label className="transparent-setting"><input id="trail-fade" type="checkbox" checked={settings.trailFade} disabled={settings.cursorMode !== 'trail'} onChange={e => set('trailFade', e.target.checked)} />留痕渐淡</label>
       <p className="field-note">仅作用于划线留痕。当前线清晰，前文逐渐变淡；透明开关优先隐藏全部线条。</p>
@@ -152,9 +204,9 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
         <input id="trail-fade-duration" type="range" ref={updateRangeFill} min="0" max="1" step="0.1" value={settings.trailFadeDuration} onChange={e => set('trailFadeDuration', Number(e.target.value))} />
       </fieldset>
       <p className="field-note">从刚读完的上一行起，向前经过设定行数达到最淡。越早的线不会更深；最淡设0%可隐藏远处线条。过渡跟随阅读时间，暂停时不再变化；不改变阅读速度。</p>
-      <button className="text-button" onClick={() => onChange({ ...settings, trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4 })}>恢复留痕默认</button>
+      <button className="text-button" onClick={() => setSettings({ ...settings, trailFade: true, trailCurrent: 100, trailRecent: 65, trailMinimum: 25, trailFadeLines: 5, trailFadeDuration: 0.4 })}>恢复留痕默认</button>
     </section>
-    <section className="settings-section">
+    <section className="settings-section" hidden={activeGroup !== 'ambient'}>
       <h3>阅读环境音</h3>
       <label className="transparent-setting"><input id="ambient-enabled" type="checkbox" checked={settings.ambientEnabled} onChange={e => set('ambientEnabled', e.target.checked)} />开启自然环境音</label>
       <div className="layout-options" role="group" aria-label="环境音类型">
@@ -167,7 +219,7 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       <p className="field-note">已选真实自然录音，随应用离线提供并平滑循环。开始阅读后才播放，设置与翻页暂停也遵循上方选项；返回书架、锁屏或进入后台停止。启停柔和过渡，不随字速变化。请配合手机系统音量低音量使用；百分比不代表安全响度。</p>
       <details className="field-note"><summary>录音来源与授权</summary><p>柔雨：soundrecorder7（Freesound 167034）；微风：o_ciz（475448）；流水：BurghRecords（446019）。均为 CC0 1.0。使用作者公开高质量预览，非原始无损录音；保持原双声道，雨声左右相同，未人工扩宽。来源及处理记录随项目保存。</p></details>
     </section>
-    <section className="settings-section speech-settings">
+    <section className="settings-section speech-settings" hidden={activeGroup !== 'speech'}>
       <h3>听书朗读</h3>
       <label className="speech-field" htmlFor="speech-engine">朗读引擎
         <select id="speech-engine" value={settings.speechEngine} onChange={event => set('speechEngine', event.target.value === 'neural' ? 'neural' : 'system')}>
@@ -189,7 +241,14 @@ export function SettingsPanel({ settings, onChange, onClose, bookSpecific = fals
       {settings.speechEngine === 'neural' && !neuralReady && <p className="field-note">当前安装包未提供本地神经语音模型，听书将自动使用系统语音。</p>}
       {!availability.available && !neuralReady && <p className="field-note">当前设备尚未检测到离线中文语音，可在手机系统「文字转语音」设置中下载中文语音包。</p>}
     </section>
-    <footer className="modal-footer"><button className="text-button" onClick={() => onChange({ ...defaultSettings })}><RotateCcw size={15} />恢复默认</button><button className="primary-button" onClick={onClose}>完成设置 <Check size={16} /></button></footer>
+    {confirmDiscard && <div className="settings-discard" role="alertdialog" aria-label="放弃未保存的修改"><span>有未保存的修改，确定放弃吗？</span><button className="text-button" onClick={() => setConfirmDiscard(false)}>继续编辑</button><button className="text-button" onClick={onClose}>放弃并关闭</button></div>}
+    <footer className="modal-footer settings-footer">
+      <button className="text-button" onClick={() => setSettings({ ...defaultSettings })}><RotateCcw size={15} />恢复默认</button>
+      <div className="settings-footer-actions">
+        <button className="text-button" onClick={discard}>放弃修改</button>
+        <button className="primary-button" onClick={save}>保存设置 <Check size={16} /></button>
+      </div>
+    </footer>
   </Modal>;
 }
 

@@ -44,4 +44,15 @@ describe('Android返回层级', () => {
     const dispose = listenForAndroidBack(); await Promise.resolve(); dispose(); await Promise.resolve();
     expect(native.minimizeApp).not.toHaveBeenCalled();
   });
+  it('监听有效期内触发 Android 返回键导航', async () => {
+    native.addListener.mockResolvedValueOnce({ remove: native.remove });
+    const dispose = listenForAndroidBack();
+    await Promise.resolve();
+    vi.stubGlobal('document', doc([]));
+    vi.stubGlobal('window', new EventTarget());
+    native.addListener.mock.calls[0][1]();
+    expect(native.minimizeApp).toHaveBeenCalledOnce();
+    dispose();
+    await Promise.resolve();
+  });
 });

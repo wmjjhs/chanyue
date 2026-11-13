@@ -454,6 +454,21 @@ input[type="color"]::-webkit-color-swatch { border: 0; border-radius: 2px; }
 .settings-modal .modal-footer .text-button svg { margin-right: 7px; }
 .settings-modal .modal-footer .primary-button { gap: 0; }
 .settings-modal .modal-footer .primary-button svg { margin-left: 10px; }
+.settings-modal { touch-action: pan-y; }
+.settings-groups { display: flex; gap: 8px; overflow-x: auto; padding: 4px 0 12px; margin-top: 14px; scrollbar-width: none; }
+.settings-groups::-webkit-scrollbar { display: none; }
+.settings-groups button { flex: 0 0 auto; min-height: 32px; padding: 0 14px; border: 1px solid #e4e8dc; border-radius: 999px; background: #f5f7f0; color: #87917d; font-size: 11px; letter-spacing: .3px; }
+.settings-groups button[aria-selected="true"] { background: #e9efe1; border-color: #9cab8c; color: #536c42; font-weight: 600; }
+.settings-hint { font-size: 10px; line-height: 1.7; color: #97a08c; margin: 0 0 4px; }
+.settings-hint.dirty { color: #8a7442; }
+.settings-section[hidden] { display: none; }
+.settings-section { border-top: 1px solid #eceee4; margin-top: 16px; }
+.settings-section > h3 { letter-spacing: 1px; color: #5d6b51; }
+.settings-modal .settings-footer { position: sticky; bottom: -29px; z-index: 2; background: #fcfcf8; padding-bottom: 12px; box-shadow: 0 -14px 18px #fcfcf8; }
+.settings-footer-actions { display: flex; align-items: center; gap: 16px; }
+.settings-discard { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; margin-top: 14px; border: 1px solid #e5ddc4; border-radius: 8px; background: #fbf7ec; font-size: 11px; color: #77694c; }
+.settings-discard span { flex: 1 1 150px; }
+.settings-discard button { padding: 6px 8px; }
 .cursor-setting input:disabled { opacity: .4; }
 .speech-field { display: block; margin: 14px 0 6px; font-size: 12px; }
 .speech-settings select { display: block; width: 100%; margin-top: 8px; padding: 9px 10px; font: inherit; font-size: 12px; color: #35462b; background: #fafbf6; border: 1px solid #dce2d2; border-radius: 8px; }
